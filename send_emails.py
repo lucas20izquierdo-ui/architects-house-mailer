@@ -32,6 +32,7 @@ import urllib.request, urllib.error, urllib.parse
 TZ = dt.timezone(dt.timedelta(hours=2))
 TODAY = lambda: dt.datetime.now(TZ).date()
 WATCHDOG = 240          # segundos máximo de ejecución
+UA = 'architects-house-mailer/1.0'   # Cloudflare bloquea peticiones sin User-Agent
 
 def log(msg):
     print(msg, flush=True)
@@ -255,7 +256,8 @@ def send_resend(api_key, from_email, to, subject, body, site_url, reply_to=None,
         return True, 'dry-run'
     req = urllib.request.Request(
         'https://api.resend.com/emails', data=json.dumps(payload).encode(),
-        headers={'Authorization': 'Bearer ' + api_key, 'Content-Type': 'application/json'},
+        headers={'Authorization': 'Bearer ' + api_key, 'Content-Type': 'application/json',
+                 'User-Agent': UA},
         method='POST')
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
@@ -319,18 +321,25 @@ def check_mode():
 
     log('[4/4] Comprobando la clave de Resend…')
     req = urllib.request.Request('https://api.resend.com/domains',
-                                 headers={'Authorization': 'Bearer ' + api}, method='GET')
+                                 headers={'Authorization': 'Bearer ' + api, 'User-Agent': UA},
+                                 method='GET')
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             data = json.loads(r.read().decode())
             doms = [d.get('name') for d in (data.get('data') or [])]
             log('      clave válida. Dominios: %s' % (', '.join(doms) if doms else 'ninguno verificado'))
-    except Exception as e:
-        detail = ''
+            if not doms:
+                log('      AVISO: sin dominio verificado solo se puede enviar en modo prueba.')
+    except urllib.error.HTTPError as e:
         try: detail = e.read().decode()[:200]
-        except Exception: pass
-        log('      clave NO válida: %s %s' % (e, detail))
-        ok = False
+        except Exception: detail = ''
+        if e.code == 403:
+            log('      clave de solo envío: no se puede verificar sin enviar. Se comprueba al enviar.')
+        else:
+            log('      clave NO válida (HTTP %s): %s' % (e.code, detail))
+            ok = False
+    except Exception as e:
+        log('      no se pudo comprobar: %s' % e)
 
     log('\nRESULTADO: %s' % ('todo correcto, ya puedes enviar' if ok else 'hay algo que arreglar'))
     return 0 if ok else 4

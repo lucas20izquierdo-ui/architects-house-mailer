@@ -2,8 +2,8 @@ name: Send guest emails
 
 on:
   schedule:
-    - cron: '10 * * * *'      # cada hora, en el minuto 10
-  workflow_dispatch:          # permite lanzarlo a mano desde GitHub
+    - cron: '10 * * * *'
+  workflow_dispatch:
 
 jobs:
   send:
@@ -16,7 +16,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install -r tools/mailer/requirements.txt
+        run: pip install -r requirements.txt
 
       - name: Send scheduled emails
         env:
@@ -26,4 +26,4 @@ jobs:
           REPLY_TO:         ${{ secrets.REPLY_TO }}
           SITE_URL:         ${{ vars.SITE_URL }}
           DRY_RUN:          ${{ vars.DRY_RUN }}
-        run: python tools/mailer/send_emails.py
+        run: python send_emails.py

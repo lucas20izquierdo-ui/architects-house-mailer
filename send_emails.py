@@ -367,6 +367,10 @@ def main():
     site = os.environ.get('SITE_URL') or 'https://architectshouse-78dd4.web.app'
     reply = os.environ.get('REPLY_TO') or None
     catchup = int(os.environ.get('CATCHUP_DAYS', '2') or 2)
+    test_to = (os.environ.get('TEST_TO') or '').strip()   # modo prueba
+    if test_to:
+        log('MODO PRUEBA ACTIVADO: todos los correos irán a %s' % test_to)
+        log('(no se guarda registro, así que luego se volverán a enviar de verdad)')
 
     faltan = [n for n, v in (('FIREBASE_SA_JSON', sa), ('RESEND_API_KEY', api), ('FROM_EMAIL', frm)) if not v]
     if faltan:
@@ -396,22 +400,24 @@ def main():
     sent = skipped = failed = 0
     for m in pend:
         rid = m['res'].get('id', '')
-        if not dry and fs.get('mail_log/%s_%s' % (rid, m['key'])) is not None:
+        if not dry and not test_to and fs.get('mail_log/%s_%s' % (rid, m['key'])) is not None:
             skipped += 1
             log('  · ya enviado: %s %s' % (rid, m['key']))
             continue
-        ok, info = send_resend(api, frm, m['to'], m['subject'], m['body'], site, reply, dry)
+        dest   = test_to or m['to']
+        asunto = ('[PRUEBA] ' + m['subject']) if test_to else m['subject']
+        ok, info = send_resend(api, frm, dest, asunto, m['body'], site, reply, dry)
         if ok:
             sent += 1
-            if not dry:
+            if not dry and not test_to:
                 fs.set('mail_log', '%s_%s' % (rid, m['key']), {
-                    'resId': rid, 'key': m['key'], 'to': m['to'], 'subject': m['subject'],
+                    'resId': rid, 'key': m['key'], 'to': dest, 'subject': asunto,
                     'date': TODAY().isoformat(), 'sentAt': dt.datetime.now(TZ).isoformat(),
                     'provider': 'resend', 'msgId': info, 'status': 'sent'})
-            log('  ✓ %s %s -> %s' % (rid, m['key'], m['to']))
+            log('  ✓ %s %s -> %s%s' % (rid, m['key'], dest, '  [PRUEBA]' if test_to else ''))
         else:
             failed += 1
-            log('  ✗ %s %s -> %s: %s' % (rid, m['key'], m['to'], info))
+            log('  ✗ %s %s -> %s: %s' % (rid, m['key'], dest, info))
 
     log('Resumen: %d enviados · %d ya enviados · %d fallidos' % (sent, skipped, failed))
     return 0

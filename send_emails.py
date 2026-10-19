@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-send_emails.py · Architect's House
+send_emails.py · Architect's House  (v2 · API REST de Firestore)
 Envía automáticamente los correos de reserva leyendo Firestore y mandándolos con Resend.
 
-Correos que envía (las mismas plantillas que editas en Ajustes → plantillas de correo):
-  confirm    al reservar (hasta 2 días después si el cron estaba parado)
+  confirm    al reservar (y hasta 2 días después si el reloj estaba parado)
   before     3 días antes de la entrada
   checkin    el mismo día de la entrada
   during     1 día después de la entrada
@@ -14,25 +13,129 @@ Correos que envía (las mismas plantillas que editas en Ajustes → plantillas d
   review     2 días después de la salida
 
 Uso:
-  python send_emails.py            # envío real
-  python send_emails.py --dry-run  # muestra qué enviaría, sin mandar nada
-  python send_emails.py --selftest # prueba la lógica con datos falsos (sin red)
+  python send_emails.py             envío real
+  python send_emails.py --dry-run   muestra qué enviaría, sin mandar nada
+  python send_emails.py --check     comprueba claves y conexión, sin enviar
+  python send_emails.py --selftest  prueba la lógica sin red
 
-Variables de entorno:
-  FIREBASE_SA_JSON   contenido del JSON de la cuenta de servicio de Firebase
-  RESEND_API_KEY     clave de API de Resend
-  FROM_EMAIL         remitente, p.ej. "Architect's House <reservas@tudominio.ch>"
-  REPLY_TO           (opcional) dirección de respuesta
-  SITE_URL           (opcional) https://architectshouse-78dd4.web.app  (para {{link}})
-  CATCHUP_DAYS       (opcional, 2) días de retraso que aún se envían
-  DRY_RUN            (opcional) 1 = no enviar
+Variables de entorno (GitHub Secrets):
+  FIREBASE_SA_JSON  contenido del JSON de la cuenta de servicio de Firebase
+  RESEND_API_KEY    clave de API de Resend
+  FROM_EMAIL        remitente:  Architect's House <reservas@tudominio.ch>
+  REPLY_TO          (opcional) dirección de respuesta
+  SITE_URL          (opcional) https://architectshouse-78dd4.web.app
+  DRY_RUN           (opcional) 1 = no enviar
 """
-import os, sys, json, datetime as dt
+import os, sys, json, signal, datetime as dt
+import urllib.request, urllib.error, urllib.parse
 
-TZ = dt.timezone(dt.timedelta(hours=2))  # Europe/Zurich (verano); el invierno da igual a estos efectos
+TZ = dt.timezone(dt.timedelta(hours=2))
 TODAY = lambda: dt.datetime.now(TZ).date()
+WATCHDOG = 240          # segundos máximo de ejecución
 
-# --- desplazamientos: clave -> (campo, días)  (idéntico a la web) -------------
+def log(msg):
+    print(msg, flush=True)
+
+# ==================== Firestore por REST (sin librerías pesadas) ==============
+SCOPES = ['https://www.googleapis.com/auth/datastore']
+BASE = 'https://firestore.googleapis.com/v1/projects/{pid}/databases/(default)/documents'
+
+class Firestore:
+    def __init__(self, sa_json):
+        from google.oauth2 import service_account
+        from google.auth.transport.requests import Request
+        self._Request = Request
+        try:
+            info = json.loads(sa_json)
+        except Exception as e:
+            log('=' * 60)
+            log('ERROR: FIREBASE_SA_JSON no contiene un JSON válido.')
+            log('Debe ser el contenido íntegro del archivo .json descargado de Firebase')
+            log('(Project settings → Service accounts → Generate new private key).')
+            log('Detalle: %s' % e)
+            log('=' * 60)
+            sys.exit(3)
+        if 'private_key' not in info:
+            log('ERROR: el JSON no trae la clave privada. Descárgalo de nuevo de Firebase.')
+            sys.exit(3)
+        self.pid = info.get('project_id')
+        self.creds = service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
+        self.base = BASE.format(pid=self.pid)
+
+    def _token(self):
+        if not self.creds.valid:
+            self.creds.refresh(self._Request())
+        return self.creds.token
+
+    def _call(self, path, method='GET', body=None, timeout=25):
+        url = self.base + path
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(
+            url, data=data, method=method,
+            headers={'Authorization': 'Bearer ' + self._token(),
+                     'Content-Type': 'application/json'})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read().decode() or '{}')
+        except urllib.error.HTTPError as e:
+            return {'__error__': e.code, '__detail__': e.read().decode()[:400]}
+        except Exception as e:
+            return {'__error__': -1, '__detail__': str(e)}
+
+    # --- conversión de valores Firestore -------------------------------------
+    @staticmethod
+    def decode_value(v):
+        for k in ('stringValue', 'booleanValue', 'doubleValue'):
+            if k in v: return v[k]
+        if 'integerValue' in v:
+            try: return int(v['integerValue'])
+            except Exception: return v['integerValue']
+        if 'nullValue' in v: return None
+        if 'timestampValue' in v: return str(v['timestampValue'])[:10]
+        if 'mapValue' in v: return Firestore.decode_fields(v['mapValue'].get('fields', {}))
+        if 'arrayValue' in v: return [Firestore.decode_value(x) for x in v['arrayValue'].get('values', [])]
+        return None
+
+    @staticmethod
+    def decode_fields(fields):
+        return {k: Firestore.decode_value(v) for k, v in (fields or {}).items()}
+
+    @staticmethod
+    def encode_value(v):
+        if v is None: return {'nullValue': None}
+        if isinstance(v, bool): return {'booleanValue': v}
+        if isinstance(v, int): return {'integerValue': str(v)}
+        if isinstance(v, float): return {'doubleValue': v}
+        return {'stringValue': str(v)}
+
+    # --- operaciones ----------------------------------------------------------
+    def docs(self, collection, timeout=25):
+        """Devuelve [(id, campos)] de una colección."""
+        out, token = [], None
+        for _ in range(20):
+            path = '/' + collection + '?pageSize=300'
+            if token: path += '&pageToken=' + urllib.parse.quote(token)
+            res = self._call(path, timeout=timeout)
+            if '__error__' in res:
+                log('  ✗ Firestore(%s): HTTP %s %s' % (collection, res['__error__'], res.get('__detail__', '')[:200]))
+                return out
+            for d in res.get('documents', []):
+                out.append((d['name'].split('/')[-1], self.decode_fields(d.get('fields', {}))))
+            token = res.get('nextPageToken')
+            if not token: break
+        return out
+
+    def get(self, path, timeout=25):
+        res = self._call('/' + path, timeout=timeout)
+        if '__error__' in res: return None
+        return self.decode_fields(res.get('fields', {}))
+
+    def set(self, collection, doc_id, fields, timeout=25):
+        body = {'fields': {k: self.encode_value(v) for k, v in fields.items()}}
+        path = '/' + collection + '?documentId=' + urllib.parse.quote(doc_id, safe='')
+        return self._call(path, method='POST', body=body, timeout=timeout)
+
+# ==================== plantillas y formato ====================================
 OFFSETS = {
     'before':    ('ci', -3),
     'checkin':   ('ci',  0),
@@ -45,13 +148,11 @@ MESES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto',
          'septiembre','octubre','noviembre','diciembre']
 DIAS = ['lunes','martes','miércoles','jueves','viernes','sábado','domingo']
 
-# --- utilidades de formato (equivalentes a las de la web) ---------------------
 def parse_date(s):
     if not s: return None
     if isinstance(s, dt.datetime): return s.date()
     if isinstance(s, dt.date): return s
-    s = str(s)[:10]
-    try: return dt.date.fromisoformat(s)
+    try: return dt.date.fromisoformat(str(s)[:10])
     except ValueError: return None
 
 def fmt_long(d):
@@ -65,17 +166,16 @@ def chf(n):
 
 def render(tpl, r, p, site_url):
     if tpl is None: return ''
-    link = site_url.rstrip('/') + '/#/stay/' + str(r.get('id', ''))
     vals = {
-        'guest':         (str(r.get('first', '')).strip() or '').strip(),
-        'property':      p.get('name', '') or '',
-        'checkin':       fmt_long(parse_date(r.get('ci'))),
-        'checkout':      fmt_long(parse_date(r.get('co'))),
-        'checkintime':   p.get('checkin', '') or '',
-        'checkouttime':  p.get('checkout', '') or '',
-        'total':         chf(r.get('total')),
-        'booking':       r.get('id', '') or '',
-        'link':          link,
+        'guest':        str(r.get('first', '') or ''),
+        'property':     p.get('name', '') or '',
+        'checkin':      fmt_long(parse_date(r.get('ci'))),
+        'checkout':     fmt_long(parse_date(r.get('co'))),
+        'checkintime':  p.get('checkin', '') or '',
+        'checkouttime': p.get('checkout', '') or '',
+        'total':        chf(r.get('total')),
+        'booking':      r.get('id', '') or '',
+        'link':         site_url.rstrip('/') + '/#/stay/' + str(r.get('id', '')),
     }
     out = str(tpl)
     for k, v in vals.items():
@@ -86,14 +186,13 @@ def html_wrap(text, site_url):
     body = (text or '').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
     body = body.replace('\n', '<br>')
     brand = (site_url or '').replace('https://', '').replace('http://', '').rstrip('/')
-    return f'''<div style="font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;color:#1b1b19;max-width:560px;margin:0 auto;padding:24px">
-  <div style="font-size:20px;margin-bottom:18px">Architect's<i>House</i></div>
-  <div style="font-size:15px;line-height:1.7">{body}</div>
-  <hr style="border:0;border-top:1px solid #e6e4dc;margin:26px 0">
-  <p style="font-size:11px;color:#9a9a94">{brand}</p>
-</div>'''
+    return ('<div style="font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;'
+            'color:#1b1b19;max-width:560px;margin:0 auto;padding:24px">'
+            '<div style="font-size:20px;margin-bottom:18px">Architect\'s<i>House</i></div>'
+            f'<div style="font-size:15px;line-height:1.7">{body}</div>'
+            '<hr style="border:0;border-top:1px solid #e6e4dc;margin:26px 0">'
+            f'<p style="font-size:11px;color:#9a9a94">{brand}</p></div>')
 
-# --- plantillas por defecto (si aún no hay nada en Firestore) -----------------
 DEFAULT = {
     'confirm':   ('Your stay at {{property}} is confirmed',
                   'Dear {{guest}},\n\nThank you for booking directly with Architect’sHouse. Your stay at {{property}} from {{checkin}} to {{checkout}} is confirmed (booking {{booking}}).\n\nTotal paid: {{total}}\n\nEverything you need is on your stay page: {{link}}\n\nWarm regards,\nLucas, Architect’sHouse'),
@@ -120,9 +219,7 @@ def pick_template(settings, key):
         pass
     return DEFAULT.get(key, ('', ''))
 
-# --- qué toca enviar hoy ------------------------------------------------------
 def due_messages(reservations, props, settings, site_url, today=None, catchup=2):
-    """Devuelve lista de dicts listos para enviar."""
     today = today or TODAY()
     out = []
     for r in reservations:
@@ -132,44 +229,33 @@ def due_messages(reservations, props, settings, site_url, today=None, catchup=2)
         p = props.get(r.get('propId'), {})
         ci, co = parse_date(r.get('ci')), parse_date(r.get('co'))
         if not ci or not co: continue
-
-        # confirmación: cuando la reserva es reciente (hoy o los 2 días anteriores)
         created = parse_date(r.get('created'))
         if created and 0 <= (today - created).days <= catchup:
             s, b = pick_template(settings, 'confirm')
             out.append(dict(key='confirm', res=r, prop=p, to=email,
                             subject=render(s, r, p, site_url), body=render(b, r, p, site_url)))
-
-        # resto: por fecha relativa a entrada/salida
         for key, (field, delta) in OFFSETS.items():
             base = ci if field == 'ci' else co
             when = base + dt.timedelta(days=delta)
             lag = (today - when).days
-            if lag < 0 or lag > catchup: continue     # aún no toca, o demasiado viejo
+            if lag < 0 or lag > catchup: continue
             if lag > 0 and (co + dt.timedelta(days=3)) < today: continue
             s, b = pick_template(settings, key)
             out.append(dict(key=key, res=r, prop=p, to=email,
                             subject=render(s, r, p, site_url), body=render(b, r, p, site_url)))
     return out
 
-# --- envío con Resend ---------------------------------------------------------
+# ==================== Resend ==================================================
 def send_resend(api_key, from_email, to, subject, body, site_url, reply_to=None, dry=False):
-    import urllib.request
-    payload = {
-        'from': from_email,
-        'to': [to],
-        'subject': subject,
-        'html': html_wrap(body, site_url),
-        'text': body,
-    }
+    payload = {'from': from_email, 'to': [to], 'subject': subject,
+               'html': html_wrap(body, site_url), 'text': body}
     if reply_to: payload['reply_to'] = reply_to
     if dry:
-        print(f'  [dry-run] -> {to} | {subject}')
+        log('  [dry-run] -> %s | %s' % (to, subject))
         return True, 'dry-run'
     req = urllib.request.Request(
-        'https://api.resend.com/emails',
-        data=json.dumps(payload).encode(),
-        headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+        'https://api.resend.com/emails', data=json.dumps(payload).encode(),
+        headers={'Authorization': 'Bearer ' + api_key, 'Content-Type': 'application/json'},
         method='POST')
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
@@ -178,41 +264,9 @@ def send_resend(api_key, from_email, to, subject, body, site_url, reply_to=None,
         detail = ''
         try: detail = e.read().decode()[:300]
         except Exception: pass
-        return False, f'{e} {detail}'
+        return False, '%s %s' % (e, detail)
 
-# --- Firestore ----------------------------------------------------------------
-def load_firestore(sa_json):
-    from google.cloud import firestore
-    from google.oauth2 import service_account
-    info = json.loads(sa_json)
-    creds = service_account.Credentials.from_service_account_info(info)
-    return firestore.Client(project=info.get('project_id'), credentials=creds)
-
-def fetch(db):
-    props = {}
-    for d in db.collection('props').stream():
-        props[d.id] = d.to_dict() or {}
-    reservations = [d.to_dict() for d in db.collection('reservations').stream()]
-    settings = {}
-    try:
-        meta = db.document('private/data/meta/main').get()
-        if meta.exists:
-            settings = (meta.to_dict() or {}).get('settings') or {}
-    except Exception as e:
-        print('  aviso: no se pudo leer settings:', e)
-    return props, reservations, settings
-
-def already_sent(db, res_id, key):
-    return db.document(f'mail_log/{res_id}_{key}').get().exists
-
-def mark_sent(db, res_id, key, to, subject, when, msg_id):
-    db.document(f'mail_log/{res_id}_{key}').set({
-        'resId': res_id, 'key': key, 'to': to, 'subject': subject,
-        'date': when.isoformat(), 'sentAt': dt.datetime.now(TZ).isoformat(),
-        'provider': 'resend', 'msgId': msg_id, 'status': 'sent',
-    })
-
-# --- selftest (sin red) -------------------------------------------------------
+# ==================== modos ===================================================
 def selftest():
     today = dt.date(2026, 10, 20)
     props = {'p1': {'name': 'Maison du Lac', 'checkin': '16:00', 'checkout': '11:00'}}
@@ -220,57 +274,133 @@ def selftest():
             'email': 'lucas20.izquierdo@gmail.com', 'ci': '2026-10-20', 'co': '2026-10-23',
             'total': 1234.5, 'status': 'paid', 'created': '2026-10-20'}]
     msgs = due_messages(res, props, {}, 'https://architectshouse-78dd4.web.app', today=today)
-    print(f'SELFTEST · hoy {today} · {len(msgs)} mensaje(s) que tocarían:')
+    log('SELFTEST · hoy %s · %d mensaje(s)' % (today, len(msgs)))
     for m in msgs:
-        print(f'\n--- {m["key"]} -> {m["to"]}')
-        print('ASUNTO:', m['subject'])
-        print(m['body'][:220].replace('\n', ' | '))
+        log('\n--- %s -> %s' % (m['key'], m['to']))
+        log('ASUNTO: ' + m['subject'])
+        log(m['body'][:200])
     assert msgs, 'debería tocar al menos el correo de check-in'
-    print('\nOK: la lógica funciona.')
+    log('\nOK: la lógica funciona.')
     return 0
 
-# --- main ---------------------------------------------------------------------
-def main():
-    if '--selftest' in sys.argv:
-        return selftest()
-    dry = '--dry-run' in sys.argv or os.environ.get('DRY_RUN') == '1'
+def check_mode():
+    """Comprueba claves y conexión sin enviar nada."""
     sa = os.environ.get('FIREBASE_SA_JSON')
     api = os.environ.get('RESEND_API_KEY')
     frm = os.environ.get('FROM_EMAIL')
-    site = os.environ.get('SITE_URL', 'https://architectshouse-78dd4.web.app')
+    ok = True
+    log('[1/4] Comprobando secretos…')
+    for n, v in (('FIREBASE_SA_JSON', sa), ('RESEND_API_KEY', api), ('FROM_EMAIL', frm)):
+        estado = 'OK' if v else 'FALTA'
+        if not v: ok = False
+        log('      %-18s %s' % (n, estado))
+    if not (sa and api and frm):
+        log('\nFaltan secretos. Créalos en Settings → Secrets and variables → Actions.')
+        return 2
+
+    log('[2/4] Validando el JSON de Firebase…')
+    try:
+        info = json.loads(sa)
+        log('      proyecto: %s' % info.get('project_id'))
+        log('      cuenta:   %s' % info.get('client_email'))
+    except Exception as e:
+        log('      JSON inválido: %s' % e)
+        return 3
+
+    log('[3/4] Conectando con Firestore…')
+    fs = Firestore(sa)
+    props = dict((i, d) for i, d in fs.docs('props'))
+    res = fs.docs('reservations')
+    log('      alojamientos leídos: %d' % len(props))
+    log('      reservas leídas:     %d' % len(res))
+    if not props and not res:
+        log('      AVISO: no he leído nada. Revisa permisos del service account.')
+        ok = False
+
+    log('[4/4] Comprobando la clave de Resend…')
+    req = urllib.request.Request('https://api.resend.com/domains',
+                                 headers={'Authorization': 'Bearer ' + api}, method='GET')
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = json.loads(r.read().decode())
+            doms = [d.get('name') for d in (data.get('data') or [])]
+            log('      clave válida. Dominios: %s' % (', '.join(doms) if doms else 'ninguno verificado'))
+    except Exception as e:
+        detail = ''
+        try: detail = e.read().decode()[:200]
+        except Exception: pass
+        log('      clave NO válida: %s %s' % (e, detail))
+        ok = False
+
+    log('\nRESULTADO: %s' % ('todo correcto, ya puedes enviar' if ok else 'hay algo que arreglar'))
+    return 0 if ok else 4
+
+def main():
+    if '--selftest' in sys.argv: return selftest()
+    if '--check' in sys.argv:    return check_mode()
+    dry = '--dry-run' in sys.argv or os.environ.get('DRY_RUN') == '1'
+
+    def _timeout(signum, frame):
+        log('\nTIEMPO AGOTADO (%ss). El programa se ha atascado; revisa la conexión con Firestore.' % WATCHDOG)
+        sys.exit(4)
+    try:
+        signal.signal(signal.SIGALRM, _timeout); signal.alarm(WATCHDOG)
+    except Exception:
+        pass
+
+    sa   = os.environ.get('FIREBASE_SA_JSON')
+    api  = os.environ.get('RESEND_API_KEY')
+    frm  = os.environ.get('FROM_EMAIL')
+    site = os.environ.get('SITE_URL') or 'https://architectshouse-78dd4.web.app'
     reply = os.environ.get('REPLY_TO') or None
     catchup = int(os.environ.get('CATCHUP_DAYS', '2') or 2)
 
-    missing = [n for n, v in (('FIREBASE_SA_JSON', sa), ('RESEND_API_KEY', api), ('FROM_EMAIL', frm)) if not v]
-    if missing:
-        print('Faltan variables de entorno:', ', '.join(missing)); return 2
+    faltan = [n for n, v in (('FIREBASE_SA_JSON', sa), ('RESEND_API_KEY', api), ('FROM_EMAIL', frm)) if not v]
+    if faltan:
+        log('Faltan variables de entorno: ' + ', '.join(faltan))
+        log('Créalas en Settings → Secrets and variables → Actions.')
+        return 2
 
-    db = load_firestore(sa)
-    props, reservations, settings = fetch(db)
-    print(f'Firestore: {len(props)} alojamientos · {len(reservations)} reservas')
+    log('[1/5] Conectando con Firestore…')
+    fs = Firestore(sa)
+    log('      proyecto %s' % fs.pid)
+
+    log('[2/5] Leyendo alojamientos…')
+    props = dict((i, d) for i, d in fs.docs('props'))
+    log('      %d alojamientos' % len(props))
+
+    log('[3/5] Leyendo reservas…')
+    reservations = [d for _, d in fs.docs('reservations')]
+    log('      %d reservas' % len(reservations))
+
+    log('[4/5] Leyendo plantillas…')
+    settings = fs.get('private/data/meta/main').get('settings') or {}
+    log('      plantillas: %s' % (', '.join(sorted((settings.get('emails') or {}).keys())) or 'ninguna (uso las de fábrica)'))
 
     pend = due_messages(reservations, props, settings, site, catchup=catchup)
-    print(f'Mensajes que tocan hoy: {len(pend)}')
+    log('[5/5] Mensajes que tocan hoy: %d%s' % (len(pend), '  (DRY RUN)' if dry else ''))
 
     sent = skipped = failed = 0
     for m in pend:
         rid = m['res'].get('id', '')
-        if not dry and already_sent(db, rid, m['key']):
+        if not dry and fs.get('mail_log/%s_%s' % (rid, m['key'])) is not None:
             skipped += 1
-            print(f'  · ya enviado: {rid} {m["key"]}')
+            log('  · ya enviado: %s %s' % (rid, m['key']))
             continue
         ok, info = send_resend(api, frm, m['to'], m['subject'], m['body'], site, reply, dry)
         if ok:
             sent += 1
             if not dry:
-                try: mark_sent(db, rid, m['key'], m['to'], m['subject'], TODAY(), info)
-                except Exception as e: print('  aviso: no se pudo registrar:', e)
-            print(f'  ✓ {rid} {m["key"]} -> {m["to"]}')
+                fs.set('mail_log', '%s_%s' % (rid, m['key']), {
+                    'resId': rid, 'key': m['key'], 'to': m['to'], 'subject': m['subject'],
+                    'date': TODAY().isoformat(), 'sentAt': dt.datetime.now(TZ).isoformat(),
+                    'provider': 'resend', 'msgId': info, 'status': 'sent'})
+            log('  ✓ %s %s -> %s' % (rid, m['key'], m['to']))
         else:
             failed += 1
-            print(f'  ✗ {rid} {m["key"]} -> {m["to"]}: {info}')
+            log('  ✗ %s %s -> %s: %s' % (rid, m['key'], m['to'], info))
 
-    print(f'Resumen: {sent} enviados · {skipped} ya enviados · {failed} fallidos')
+    log('Resumen: %d enviados · %d ya enviados · %d fallidos' % (sent, skipped, failed))
     return 0
 
 if __name__ == '__main__':

@@ -19,6 +19,14 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Check configuration
+        env:
+          PYTHONUNBUFFERED: '1'
+          FIREBASE_SA_JSON: ${{ secrets.FIREBASE_SA_JSON }}
+          RESEND_API_KEY:   ${{ secrets.RESEND_API_KEY }}
+          FROM_EMAIL:       ${{ secrets.FROM_EMAIL }}
+        run: timeout 180 python send_emails.py --check
+
       - name: Send scheduled emails
         env:
           PYTHONUNBUFFERED: '1'

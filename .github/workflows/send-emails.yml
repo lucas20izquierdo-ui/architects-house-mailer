@@ -36,4 +36,5 @@ jobs:
           REPLY_TO:         ${{ secrets.REPLY_TO }}
           SITE_URL:         ${{ vars.SITE_URL }}
           DRY_RUN:          ${{ vars.DRY_RUN }}
+          TEST_TO:          ${{ vars.TEST_TO }}
         run: timeout 300 python send_emails.py

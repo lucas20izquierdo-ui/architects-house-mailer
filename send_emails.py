@@ -333,8 +333,12 @@ def check_mode():
     except urllib.error.HTTPError as e:
         try: detail = e.read().decode()[:200]
         except Exception: detail = ''
-        if e.code == 403:
-            log('      clave de solo envío: no se puede verificar sin enviar. Se comprueba al enviar.')
+        nombre = ''
+        try: nombre = (json.loads(detail) or {}).get('name', '') or ''
+        except Exception: nombre = ''
+        if e.code == 403 or nombre == 'restricted_api_key':
+            log('      clave de SOLO ENVÍO: es válida, pero no puede listar dominios.')
+            log('      Es la opción recomendada y segura; se verificará al enviar.')
         else:
             log('      clave NO válida (HTTP %s): %s' % (e.code, detail))
             ok = False

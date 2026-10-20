@@ -263,17 +263,29 @@ def html_wrap(text, site_url, link='', prop=None):
     boton = ('<tr><td style="padding:2px 30px 26px"><a href="%s" style="display:inline-block;'
              'background:#1b1b19;color:#ffffff;text-decoration:none;padding:12px 22px;'
              'border-radius:8px;font-size:14px">Open your stay page</a></td></tr>' % link) if link else ''
-    return ('<div style="background:#f4f2ec;padding:26px 12px">'
-            '<style>@media only screen and (max-width:620px){'
+    # Documento completo: el <meta color-scheme> tiene que ir en el <head> para que
+    # Gmail (iOS/Android) deje de invertir los colores cuando el móvil está en oscuro.
+    return ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<meta name="color-scheme" content="only light">'
+            '<meta name="supported-color-schemes" content="only light">'
+            '<style>:root{color-scheme:only light}'
+            '@media only screen and (max-width:620px){'
             '.ah-card{width:100%!important} .ah-word{font-size:21px!important}'
             '.ah-pad{padding-left:20px!important;padding-right:20px!important}}</style>'
+            '</head><body style="margin:0">'
+            '<div style="background-color:#f4f2ec;'
+            'background-image:linear-gradient(#f4f2ec,#f4f2ec);padding:26px 12px">'
             '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
             '<tr><td align="center">'
             '<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" '
-            'class="ah-card" style="width:600px;max-width:100%;background:#ffffff;border-radius:14px;'
+            'class="ah-card" style="width:600px;max-width:100%;background-color:#fffffe;'
+            'background-image:linear-gradient(#fffffe,#fffffe);border-radius:14px;'
             'overflow:hidden;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;'
             'color:#1b1b19;text-align:left">'
-            f'<tr><td class="ah-pad" style="background:#1b1b19;padding:20px 30px;color:#ffffff">{cabecera}</td></tr>'
+            f'<tr><td class="ah-pad" style="background-color:#1b1b19;'
+            'background-image:linear-gradient(#1b1b19,#1b1b19);'
+            'padding:20px 30px;color:#ffffff">{cabecera}</td></tr>'
             f'{hero}'
             f'<tr><td style="padding:28px 30px 18px;font-size:15px;line-height:1.75">{body}</td></tr>'
             f'{boton}'
@@ -283,7 +295,7 @@ def html_wrap(text, site_url, link='', prop=None):
             'You are receiving this email because you have a booking with us. '
             'Just reply to this message if you need anything.'
             '</td></tr>'
-            '</table></td></tr></table></div>')
+            '</table></td></tr></table></div></body></html>')
 
 DEFAULT = {
     'confirm':   ('Your stay at {{property}} is confirmed',

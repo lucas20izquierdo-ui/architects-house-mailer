@@ -68,6 +68,10 @@ def nights(ci, co):
 
 
 def descargar(url, timeout=20):
+    # Airbnb a veces entrega la dirección con webcal:// (no es un protocolo
+    # que se pueda descargar): se cambia por https:// y listo.
+    if url.lower().startswith('webcal://'):
+        url = 'https://' + url[len('webcal://'):]
     req = urllib.request.Request(url, headers={'User-Agent': UA, 'Accept': 'text/calendar,*/*'})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         raw = r.read()
@@ -117,10 +121,45 @@ def parse_ics(text):
 
 
 # ------------------------------------------------------------------ Firestore --
+def enc(v):
+    """Codifica un valor para Firestore.
+
+    El encode_value de send_emails.py no sabe convertir diccionarios ni listas:
+    los pasaba a texto y el alojamiento acababa con blocks = "{}" (una cadena),
+    con lo que el calendario del panel dejaba de funcionar. Aquí sí se hace
+    bien: {} -> mapValue y [] -> arrayValue.
+    """
+    if v is None:            return {'nullValue': None}
+    if isinstance(v, bool):  return {'booleanValue': v}
+    if isinstance(v, int):   return {'integerValue': str(v)}
+    if isinstance(v, float): return {'doubleValue': v}
+    if isinstance(v, dict):  return {'mapValue': {'fields': dict((str(k), enc(x)) for k, x in v.items())}}
+    if isinstance(v, (list, tuple)): return {'arrayValue': {'values': [enc(x) for x in v]}}
+    return {'stringValue': str(v)}
+
+
+def normalizar(v):
+    """Si el campo llegó a guardarse como texto, se recupera lo que se pueda."""
+    if isinstance(v, dict):
+        return dict(v)
+    if isinstance(v, str):
+        t = v.strip()
+        if t in ('', '{}', 'null', 'None'):
+            return {}
+        try:
+            import ast
+            d = ast.literal_eval(t)
+            if isinstance(d, dict):
+                return dict(d)
+        except Exception:
+            pass
+    return {}
+
+
 def parchear(fs, coleccion, doc_id, campos):
     """Actualiza sólo los campos indicados (PATCH con updateMask)."""
     mask = ''.join('&updateMask.fieldPaths=' + c for c in campos)
-    body = {'fields': {k: fs.encode_value(v) for k, v in campos.items()}}
+    body = {'fields': {k: enc(v) for k, v in campos.items()}}
     return fs._call('/%s/%s?%s' % (coleccion, doc_id, mask.lstrip('&')),
                     method='PATCH', body=body, timeout=25)
 
@@ -183,8 +222,8 @@ def sincronizar(fs):
                 rangos = parse_ics(texto)
                 nuevos = set(d for ci, co in rangos for d in nights(ci, co))
                 nuevos = set(d for d in nuevos if d >= iso(HOY - dt.timedelta(days=30)))
-                viejos = set((p.get('icalDates') or {}).keys())
-                bloqueos = dict(p.get('blocks') or {})
+                viejos = set(normalizar(p.get('icalDates')).keys())
+                bloqueos = normalizar(p.get('blocks'))
 
                 quitados = 0
                 for d in viejos - nuevos:
@@ -198,13 +237,22 @@ def sincronizar(fs):
                             anadidos += 1
                         bloqueos[d] = 'blocked'
 
-                parchear(fs, 'props', pid, {
+                if not rangos:
+                    log('  ! %-22s el calendario no trae ningún evento; no se toca nada' % nombre[:22])
+                    parchear(fs, 'props', pid, {
+                        'icalLastSync': dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                        'icalLastError': 'El calendario no trae ningún evento.',
+                        'icalNights': 0,
+                    })
+                    p['blocks'], p['icalDates'] = bloqueos, {}
+                else:
+                    parchear(fs, 'props', pid, {
                     'blocks': bloqueos,
                     'icalDates': dict((d, '1') for d in sorted(nuevos)),
                     'icalLastSync': dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
                     'icalLastError': '',
                     'icalNights': len(nuevos),
-                })
+                    })
                 log('  ✓ %-22s %3d noches bloqueadas (+%d / −%d)'
                     % (nombre[:22], len(nuevos), anadidos, quitados))
                 p['blocks'], p['icalDates'] = bloqueos, dict((d, '1') for d in sorted(nuevos))
@@ -214,7 +262,7 @@ def sincronizar(fs):
                 log('  ✗ %-22s %s' % (nombre[:22], str(e)[:120]))
 
         # ---------- EXPORTAR ------------------------------------------------
-        externos = set((p.get('icalDates') or {}).keys())
+        externos = set(normalizar(p.get('icalDates')).keys())
         propios = []
         for r in reservas:
             if r.get('propId') != pid:
@@ -224,7 +272,7 @@ def sincronizar(fs):
             if r.get('ci') and r.get('co'):
                 propios.append((r['ci'][:10], r['co'][:10],
                                 'res-' + str(r.get('code') or r.get('id') or r['ci'])))
-        for d, motivo in sorted((p.get('blocks') or {}).items()):
+        for d, motivo in sorted(normalizar(p.get('blocks')).items()):
             if d in externos:                      # ya vienen de fuera: no se reexportan
                 continue
             if desde_iso(d) and d >= iso(HOY - dt.timedelta(days=30)):

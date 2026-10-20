@@ -11,6 +11,9 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: write
+
 jobs:
   send:
     runs-on: ubuntu-latest
@@ -49,4 +52,26 @@ jobs:
             timeout 300 python send_emails.py --test-all
           else
             timeout 300 python send_emails.py
+          fi
+
+      # --- Calendarios iCal -------------------------------------------------
+      # Importa el calendario de Airbnb / Booking.com y bloquea esas fechas
+      # en la web; y publica en ical/ el calendario de tus reservas.
+      - name: Sync iCal calendars
+        continue-on-error: true
+        env:
+          PYTHONUNBUFFERED: '1'
+          FIREBASE_SA_JSON: ${{ secrets.FIREBASE_SA_JSON }}
+        run: timeout 180 python ical_sync.py
+
+      - name: Publish iCal feeds
+        run: |
+          git config user.name  "AH iCal bot"
+          git config user.email "ical@architectshouse.local"
+          git add -A ical
+          if git diff --cached --quiet; then
+            echo "Los calendarios no han cambiado."
+          else
+            git commit -m "Actualizar calendarios iCal"
+            git push
           fi

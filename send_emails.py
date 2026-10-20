@@ -226,80 +226,48 @@ def hero_image(prop):
 
 
 def html_wrap(text, site_url, link='', prop=None):
-    """Correo con marca: cabecera, foto del alojamiento, botón y pie."""
+    """Correo sencillo y limpio: nombre en texto, cuerpo, botón y pie.
+
+    Sin imágenes y sin franjas de color: así se ve igual en Gmail, en el móvil
+    y en modo oscuro, y nunca aparece un hueco de imagen bloqueada.
+    """
     body = (text or '').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
     body = body.replace('\n', '<br>')
     host = (site_url or '').replace('https://', '').replace('http://', '').rstrip('/')
-    # Fondo transparente: así el logo se funde con la cabecera en modo claro
-    # y en modo oscuro, sin dejar un rectángulo de otro color.
-    logo = (os.environ.get('LOGO_URL')
-            or 'https://architectshouse-78dd4.web.app/logo-ah-blanco-750.png').strip()
-    # El logo va dentro de una tabla que ocupa el 58% de la cabecera y la imagen
-    # rellena esa tabla al 100%. Así, sea cual sea el ancho del móvil, el logo
-    # guarda la proporción y nunca se estira de borde a borde.
-    # La marca va como TEXTO, no como imagen: así se ve idéntica y nítida en Gmail,
-    # en el móvil y en cualquier cliente, aunque el cliente bloquee las imágenes
-    # (Gmail hace eso con los remitentes nuevos y deja un recuadro vacío).
-    # Si se define LOGO_URL se sigue pudiendo usar una imagen.
-    if logo.startswith('http'):
-        cabecera = ('<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
-                    'class="ah-logo" style="width:58%%;max-width:250px">'
-                    '<tr><td><img src="%s" alt="%s" width="750" height="83" '
-                    'style="width:100%%;height:auto;display:block;border:0;color:#ffffff;'
-                    "font-family:Georgia,'Times New Roman',Times,serif;font-size:21px" '" />'
-                    '</td></tr></table>'
-                    % (logo, BRAND))
-    else:
-        cabecera = ('<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
-                    'class="ah-logo"><tr>'
-                    '<td style="font-family:Georgia,\'Times New Roman\',Times,serif;'
-                    'font-size:15px;line-height:1;letter-spacing:2px;color:#B8956A;'
-                    'border:1px solid #B8956A;border-radius:2px;padding:5px 8px">AH</td>'
-                    '<td class="ah-word" style="padding-left:13px;font-family:Georgia,'
-                    "'Times New Roman',Times,serif;font-size:25px;line-height:1.15;"
-                    'letter-spacing:.2px;color:#ffffff;white-space:nowrap">'
-                    "Architect’s<span style=\"font-style:italic\">House</span></td>"
-                    '</tr></table>')
-    img = hero_image(prop)
-    hero = ('<tr><td><img src="%s" alt="" style="width:100%%;display:block;'
-            'max-height:240px;object-fit:cover"></td></tr>' % img) if img else ''
-    boton = ('<tr><td style="padding:2px 30px 26px"><a href="%s" style="display:inline-block;'
-             'background:#1b1b19;color:#ffffff;text-decoration:none;padding:12px 22px;'
-             'border-radius:8px;font-size:14px">Open your stay page</a></td></tr>' % link) if link else ''
-    # Documento completo: el <meta color-scheme> tiene que ir en el <head> para que
-    # Gmail (iOS/Android) deje de invertir los colores cuando el móvil está en oscuro.
+    marca = ('<div style="font-family:Georgia,\'Times New Roman\',Times,serif;font-size:21px;'
+             'letter-spacing:-.01em;line-height:1.25;color:#1b1b19">Architect’s'
+             '<i style="font-style:italic">House</i></div>')
+    boton = ('<a href="%s" style="display:inline-block;background:#1b1b19;color:#ffffff;'
+             'text-decoration:none;padding:12px 22px;border-radius:8px;font-size:14px">'
+             'Open your stay page</a>' % link) if link else ''
+    fila_boton = ('<tr><td class="ah-pad" style="padding:2px 30px 28px">%s</td></tr>' % boton) if boton else ''
     return ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
             '<meta name="color-scheme" content="only light">'
             '<meta name="supported-color-schemes" content="only light">'
+            '<title>Architect’sHouse</title>'
             '<style>:root{color-scheme:only light}'
             '@media only screen and (max-width:620px){'
-            '.ah-card{width:100%!important} .ah-word{font-size:21px!important}'
-            '.ah-logo{width:80%!important}'
             '.ah-pad{padding-left:20px!important;padding-right:20px!important}}</style>'
-            '</head><body style="margin:0">'
-            '<div style="background-color:#f4f2ec;'
-            'background-image:linear-gradient(#f4f2ec,#f4f2ec);padding:26px 12px">'
-            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
-            '<tr><td align="center">'
+            '</head><body style="margin:0;background:#ffffff">'
+            '<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" border="0" '
+            'style="background:#ffffff"><tr><td align="center">'
             '<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" '
-            'class="ah-card" style="width:600px;max-width:100%;background-color:#fffffe;'
-            'background-image:linear-gradient(#fffffe,#fffffe);border-radius:14px;'
-            'overflow:hidden;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;'
-            'color:#1b1b19;text-align:left">'
-            f'<tr><td class="ah-pad" style="background-color:#1b1b19;'
-            'background-image:linear-gradient(#1b1b19,#1b1b19);'
-            f'padding:20px 30px;color:#ffffff">{cabecera}</td></tr>'
-            f'{hero}'
-            f'<tr><td style="padding:28px 30px 18px;font-size:15px;line-height:1.75">{body}</td></tr>'
-            f'{boton}'
-            '<tr><td style="padding:18px 30px 24px;border-top:1px solid #efece4;'
+            'class="ah-card" style="width:600px;max-width:100%%;'
+            'font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;color:#1b1b19;'
+            'text-align:left">'
+            '<tr><td class="ah-pad" style="padding:26px 30px 16px">%s</td></tr>'
+            '<tr><td><div style="border-top:1px solid #efece4"></div></td></tr>'
+            '<tr><td class="ah-pad" style="padding:24px 30px 16px;font-size:15px;line-height:1.75">%s</td></tr>'
+            '%s'
+            '<tr><td class="ah-pad" style="padding:18px 30px 28px;border-top:1px solid #efece4;'
             'font-size:11px;line-height:1.6;color:#9a9a94">'
-            f'<b style="color:#6b6b64">{BRAND}</b> · {host}<br>'
+            '<b style="color:#6b6b64">%s</b> · %s<br>'
             'You are receiving this email because you have a booking with us. '
             'Just reply to this message if you need anything.'
-            '</td></tr>'
-            '</table></td></tr></table></div></body></html>')
+            '</td></tr></table></td></tr></table></body></html>'
+            % (marca, body, fila_boton, BRAND, host))
+
 
 DEFAULT = {
     'confirm':   ('Your stay at {{property}} is confirmed',

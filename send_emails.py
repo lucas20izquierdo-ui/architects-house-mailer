@@ -233,7 +233,7 @@ def html_wrap(text, site_url, link='', prop=None):
     # Fondo transparente: así el logo se funde con la cabecera en modo claro
     # y en modo oscuro, sin dejar un rectángulo de otro color.
     logo = (os.environ.get('LOGO_URL')
-            or '').strip()
+            or 'https://architectshouse-78dd4.web.app/logo-ah-blanco-750.png').strip()
     # El logo va dentro de una tabla que ocupa el 58% de la cabecera y la imagen
     # rellena esa tabla al 100%. Así, sea cual sea el ancho del móvil, el logo
     # guarda la proporción y nunca se estira de borde a borde.
@@ -244,8 +244,10 @@ def html_wrap(text, site_url, link='', prop=None):
     if logo.startswith('http'):
         cabecera = ('<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
                     'class="ah-logo" style="width:58%%;max-width:250px">'
-                    '<tr><td><img src="%s" alt="%s" width="1434" height="151" '
-                    'style="width:100%%;height:auto;display:block;border:0" /></td></tr></table>'
+                    '<tr><td><img src="%s" alt="%s" width="750" height="83" '
+                    'style="width:100%%;height:auto;display:block;border:0;color:#ffffff;'
+                    "font-family:Georgia,'Times New Roman',Times,serif;font-size:21px" '" />'
+                    '</td></tr></table>'
                     % (logo, BRAND))
     else:
         cabecera = ('<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
@@ -273,6 +275,7 @@ def html_wrap(text, site_url, link='', prop=None):
             '<style>:root{color-scheme:only light}'
             '@media only screen and (max-width:620px){'
             '.ah-card{width:100%!important} .ah-word{font-size:21px!important}'
+            '.ah-logo{width:80%!important}'
             '.ah-pad{padding-left:20px!important;padding-right:20px!important}}</style>'
             '</head><body style="margin:0">'
             '<div style="background-color:#f4f2ec;'

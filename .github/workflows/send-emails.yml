@@ -2,8 +2,14 @@ name: Send guest emails
 
 on:
   schedule:
-    - cron: '10 * * * *'
+    # UTC: de 06:10 a 20:10 -> 08:10-22:10 en verano, 07:10-21:10 en invierno (hora Suiza)
+    - cron: '10 6-20 * * *'
   workflow_dispatch:
+    inputs:
+      test_all:
+        description: 'Probar: enviar los 7 correos (confirm, before, checkin, during, departure, after, review)'
+        type: boolean
+        default: false
 
 jobs:
   send:
@@ -37,4 +43,10 @@ jobs:
           SITE_URL:         ${{ vars.SITE_URL }}
           DRY_RUN:          ${{ vars.DRY_RUN }}
           TEST_TO:          ${{ vars.TEST_TO }}
-        run: timeout 300 python send_emails.py
+          LOGO_URL:         ${{ vars.LOGO_URL }}
+        run: |
+          if [ "${{ inputs.test_all }}" = "true" ]; then
+            timeout 300 python send_emails.py --test-all
+          else
+            timeout 300 python send_emails.py
+          fi

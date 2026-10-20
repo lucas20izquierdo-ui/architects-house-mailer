@@ -31,6 +31,7 @@ import urllib.request, urllib.error, urllib.parse
 
 TZ = dt.timezone(dt.timedelta(hours=2))
 TODAY = lambda: dt.datetime.now(TZ).date()
+BRAND = "Architect’sHouse"
 WATCHDOG = 240          # segundos máximo de ejecución
 UA = 'architects-house-mailer/1.0'   # Cloudflare bloquea peticiones sin User-Agent
 
@@ -183,16 +184,61 @@ def render(tpl, r, p, site_url):
         out = out.replace('{{%s}}' % k, str(v))
     return out
 
-def html_wrap(text, site_url):
+def stay_link(r, site_url):
+    return (site_url or '').rstrip('/') + '/#/stay/' + str(r.get('id', '') or '')
+
+
+def hero_image(prop):
+    """Primera foto del alojamiento que sea una URL normal (ni data URI ni placeholders)."""
+    if not prop:
+        return ''
+    cands = []
+    if prop.get('photo'):
+        cands.append(prop.get('photo'))
+    for ph in (prop.get('photos') or []):
+        cands.append(ph.get('src') if isinstance(ph, dict) else ph)
+    for c in cands:
+        if isinstance(c, str) and c.startswith('http') and len(c) < 400:
+            return c
+    return ''
+
+
+def html_wrap(text, site_url, link='', prop=None):
+    """Correo con marca: cabecera, foto del alojamiento, botón y pie."""
     body = (text or '').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
     body = body.replace('\n', '<br>')
-    brand = (site_url or '').replace('https://', '').replace('http://', '').rstrip('/')
-    return ('<div style="font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;'
-            'color:#1b1b19;max-width:560px;margin:0 auto;padding:24px">'
-            '<div style="font-size:20px;margin-bottom:18px">Architect\'s<i>House</i></div>'
-            f'<div style="font-size:15px;line-height:1.7">{body}</div>'
-            '<hr style="border:0;border-top:1px solid #e6e4dc;margin:26px 0">'
-            f'<p style="font-size:11px;color:#9a9a94">{brand}</p></div>')
+    host = (site_url or '').replace('https://', '').replace('http://', '').rstrip('/')
+    logo = (os.environ.get('LOGO_URL')
+            or 'https://architectshouse-78dd4.web.app/logo-ah-dark.png').strip()
+    cabecera = (f'<img src="{logo}" alt="{BRAND}" width="205" height="32" '
+                'style="width:205px;height:32px;display:block;border:0" />'
+                if logo.startswith('http')
+                else '<span style="font-family:Georgia,\'Times New Roman\',serif;'
+                     'font-size:21px;letter-spacing:.2px">Architect’s<i>House</i></span>')
+    img = hero_image(prop)
+    hero = ('<tr><td><img src="%s" alt="" style="width:100%%;display:block;'
+            'max-height:240px;object-fit:cover"></td></tr>' % img) if img else ''
+    boton = ('<tr><td style="padding:2px 30px 26px"><a href="%s" style="display:inline-block;'
+             'background:#1b1b19;color:#ffffff;text-decoration:none;padding:12px 22px;'
+             'border-radius:8px;font-size:14px">Open your stay page</a></td></tr>' % link) if link else ''
+    return ('<div style="background:#f4f2ec;padding:26px 12px">'
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
+            '<tr><td align="center">'
+            '<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" '
+            'style="width:600px;max-width:100%;background:#ffffff;border-radius:14px;'
+            'overflow:hidden;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;'
+            'color:#1b1b19;text-align:left">'
+            f'<tr><td style="background:#1b1b19;padding:20px 30px;color:#ffffff">{cabecera}</td></tr>'
+            f'{hero}'
+            f'<tr><td style="padding:28px 30px 18px;font-size:15px;line-height:1.75">{body}</td></tr>'
+            f'{boton}'
+            '<tr><td style="padding:18px 30px 24px;border-top:1px solid #efece4;'
+            'font-size:11px;line-height:1.6;color:#9a9a94">'
+            f'<b style="color:#6b6b64">{BRAND}</b> · {host}<br>'
+            'You are receiving this email because you have a booking with us. '
+            'Just reply to this message if you need anything.'
+            '</td></tr>'
+            '</table></td></tr></table></div>')
 
 DEFAULT = {
     'confirm':   ('Your stay at {{property}} is confirmed',
@@ -234,7 +280,8 @@ def due_messages(reservations, props, settings, site_url, today=None, catchup=2)
         if created and 0 <= (today - created).days <= catchup:
             s, b = pick_template(settings, 'confirm')
             out.append(dict(key='confirm', res=r, prop=p, to=email,
-                            subject=render(s, r, p, site_url), body=render(b, r, p, site_url)))
+                            subject=render(s, r, p, site_url), body=render(b, r, p, site_url),
+                            link=stay_link(r, site_url)))
         for key, (field, delta) in OFFSETS.items():
             base = ci if field == 'ci' else co
             when = base + dt.timedelta(days=delta)
@@ -243,13 +290,74 @@ def due_messages(reservations, props, settings, site_url, today=None, catchup=2)
             if lag > 0 and (co + dt.timedelta(days=3)) < today: continue
             s, b = pick_template(settings, key)
             out.append(dict(key=key, res=r, prop=p, to=email,
-                            subject=render(s, r, p, site_url), body=render(b, r, p, site_url)))
+                            subject=render(s, r, p, site_url), body=render(b, r, p, site_url),
+                            link=stay_link(r, site_url)))
     return out
 
+# ==================== Modo prueba completa ====================================
+# Para cada tipo de correo, fecha de entrada y noches que lo provocan hoy.
+TEST_CASES = [
+    ('confirm',    5, 3, 0),     # creada hoy
+    ('before',     3, 3, None),  # entra en 3 días
+    ('checkin',    0, 3, None),  # entra hoy
+    ('during',    -1, 3, None),  # entró ayer
+    ('departure', -2, 3, None),  # sale mañana
+    ('after',     -3, 3, None),  # sale hoy
+    ('review',    -5, 3, None),  # salió hace 2 días
+]
+
+
+def test_all_mode(fs, api, frm, site, reply, dry, test_to):
+    """Crea una reserva falsa por cada tipo de correo y la envía a test_to.
+    No escribe nada en Firestore: tus datos quedan intactos."""
+    props = dict((i, d) for i, d in fs.docs('props'))
+    settings = fs.get('private/data/meta/main').get('settings') or {}
+    if props:
+        prop_id, prop = list(props.items())[0]
+    else:
+        prop_id, prop = 'DEMO', {'name': "Maison du Lac", 'checkin': '16:00', 'checkout': '11:00'}
+    log('Alojamiento de ejemplo: %s' % prop.get('name', prop_id))
+
+    dest = (test_to or '').strip()
+    if not dest:
+        log('Para este modo hay que indicar un correo: variable TEST_TO o: python send_emails.py --test-all tu@correo.com')
+        return 2
+    hoy = TODAY()
+    enviados = fallidos = 0
+    for key, d_ci, noches, creada in TEST_CASES:
+        ci = hoy + dt.timedelta(days=d_ci)
+        co = ci + dt.timedelta(days=noches)
+        r = {'id': 'PRUEBA-' + key.upper(), 'propId': prop_id,
+             'first': 'Lucas', 'last': 'Prueba', 'email': dest,
+             'ci': ci.isoformat(), 'co': co.isoformat(),
+             'total': 1234, 'status': 'confirmed'}
+        if creada is not None:
+            r['created'] = (hoy - dt.timedelta(days=creada)).isoformat()
+        mensajes = [m for m in due_messages([r], props, settings, site, catchup=2)
+                    if m['key'] == key]
+        if not mensajes:
+            log('  ✗ %-10s no se ha podido generar' % key)
+            fallidos += 1
+            continue
+        m = mensajes[0]
+        asunto = '[PRUEBA] ' + m['subject']
+        ok, info = send_resend(api, frm, dest, asunto, m['body'], site, reply, dry,
+                                     m.get('link', ''), m.get('prop'))
+        if ok:
+            enviados += 1
+            log('  ✓ %-10s -> %s  | %s' % (key, dest, asunto))
+        else:
+            fallidos += 1
+            log('  ✗ %-10s -> %s: %s' % (key, dest, info))
+    log('Resumen prueba: %d enviados · %d fallidos' % (enviados, fallidos))
+    return 0 if fallidos == 0 else 4
+
+
 # ==================== Resend ==================================================
-def send_resend(api_key, from_email, to, subject, body, site_url, reply_to=None, dry=False):
+def send_resend(api_key, from_email, to, subject, body, site_url, reply_to=None, dry=False,
+                link='', prop=None):
     payload = {'from': from_email, 'to': [to], 'subject': subject,
-               'html': html_wrap(body, site_url), 'text': body}
+               'html': html_wrap(body, site_url, link, prop), 'text': body}
     if reply_to: payload['reply_to'] = reply_to
     if dry:
         log('  [dry-run] -> %s | %s' % (to, subject))
@@ -352,6 +460,11 @@ def main():
     if '--selftest' in sys.argv: return selftest()
     if '--check' in sys.argv:    return check_mode()
     dry = '--dry-run' in sys.argv or os.environ.get('DRY_RUN') == '1'
+    test_all = '--test-all' in sys.argv
+    if test_all:
+        i = sys.argv.index('--test-all')
+        if i + 1 < len(sys.argv) and '@' in sys.argv[i + 1]:
+            os.environ['TEST_TO'] = sys.argv[i + 1].strip()
 
     def _timeout(signum, frame):
         log('\nTIEMPO AGOTADO (%ss). El programa se ha atascado; revisa la conexión con Firestore.' % WATCHDOG)
@@ -372,6 +485,10 @@ def main():
         log('MODO PRUEBA ACTIVADO: todos los correos irán a %s' % test_to)
         log('(no se guarda registro, así que luego se volverán a enviar de verdad)')
 
+    if frm and '<' not in frm:
+        frm = '%s <%s>' % (BRAND, frm.strip())
+        log('      remitente: %s' % frm)
+
     faltan = [n for n, v in (('FIREBASE_SA_JSON', sa), ('RESEND_API_KEY', api), ('FROM_EMAIL', frm)) if not v]
     if faltan:
         log('Faltan variables de entorno: ' + ', '.join(faltan))
@@ -381,6 +498,10 @@ def main():
     log('[1/5] Conectando con Firestore…')
     fs = Firestore(sa)
     log('      proyecto %s' % fs.pid)
+
+    if test_all:
+        log('MODO PRUEBA COMPLETA: un correo de cada tipo, todos a %s' % (test_to or '—'))
+        return test_all_mode(fs, api, frm, site, reply, dry, test_to)
 
     log('[2/5] Leyendo alojamientos…')
     props = dict((i, d) for i, d in fs.docs('props'))
@@ -406,7 +527,8 @@ def main():
             continue
         dest   = test_to or m['to']
         asunto = ('[PRUEBA] ' + m['subject']) if test_to else m['subject']
-        ok, info = send_resend(api, frm, dest, asunto, m['body'], site, reply, dry)
+        ok, info = send_resend(api, frm, dest, asunto, m['body'], site, reply, dry,
+                                     m.get('link', ''), m.get('prop'))
         if ok:
             sent += 1
             if not dry and not test_to:

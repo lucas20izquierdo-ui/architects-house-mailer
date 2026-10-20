@@ -146,6 +146,28 @@ OFFSETS = {
     'after':     ('co',  0),
     'review':    ('co',  2),
 }
+
+# Hora mínima (hora local de Suiza) a la que se envía cada mensaje.
+# Así, si a una estancia corta le tocan dos correos el mismo día, salen
+# separados: las instrucciones por la mañana y la despedida por la tarde.
+HORA = {
+    'confirm':    0,    # en cuanto se hace la reserva
+    'before':    10,
+    'checkin':    9,    # primera hora de la mañana del día de llegada
+    'during':    11,
+    'departure': 17,    # la víspera de salir, a última hora de la tarde
+    'after':     12,    # el día de salida, ya pasada la hora de salida
+    'review':    12,
+}
+
+
+def ahora_local():
+    """Hora actual en Suiza (el servidor de GitHub va en UTC)."""
+    try:
+        from zoneinfo import ZoneInfo
+        return dt.datetime.now(ZoneInfo('Europe/Zurich'))
+    except Exception:
+        return dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=2)
 MESES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto',
          'septiembre','octubre','noviembre','diciembre']
 DIAS = ['lunes','martes','miércoles','jueves','viernes','sábado','domingo']
@@ -266,7 +288,8 @@ def pick_template(settings, key):
         pass
     return DEFAULT.get(key, ('', ''))
 
-def due_messages(reservations, props, settings, site_url, today=None, catchup=2):
+def due_messages(reservations, props, settings, site_url, today=None, catchup=2,
+                hour=None):
     today = today or TODAY()
     out = []
     for r in reservations:
@@ -276,6 +299,7 @@ def due_messages(reservations, props, settings, site_url, today=None, catchup=2)
         p = props.get(r.get('propId'), {})
         ci, co = parse_date(r.get('ci')), parse_date(r.get('co'))
         if not ci or not co: continue
+        noches = (co - ci).days
         created = parse_date(r.get('created'))
         if created and 0 <= (today - created).days <= catchup:
             s, b = pick_template(settings, 'confirm')
@@ -283,6 +307,8 @@ def due_messages(reservations, props, settings, site_url, today=None, catchup=2)
                             subject=render(s, r, p, site_url), body=render(b, r, p, site_url),
                             link=stay_link(r, site_url)))
         for key, (field, delta) in OFFSETS.items():
+            if hour is not None and HORA.get(key, 0) > hour: continue
+            if key == 'during' and noches <= 1: continue   # ya se ha ido ese mismo día
             base = ci if field == 'ci' else co
             when = base + dt.timedelta(days=delta)
             lag = (today - when).days
@@ -515,7 +541,10 @@ def main():
     settings = fs.get('private/data/meta/main').get('settings') or {}
     log('      plantillas: %s' % (', '.join(sorted((settings.get('emails') or {}).keys())) or 'ninguna (uso las de fábrica)'))
 
-    pend = due_messages(reservations, props, settings, site, catchup=catchup)
+    ahora = ahora_local()
+    log('      hora local Suiza: %s' % ahora.strftime('%H:%M'))
+    pend = due_messages(reservations, props, settings, site, catchup=catchup,
+                        hour=ahora.hour)
     log('[5/5] Mensajes que tocan hoy: %d%s' % (len(pend), '  (DRY RUN)' if dry else ''))
 
     sent = skipped = failed = 0

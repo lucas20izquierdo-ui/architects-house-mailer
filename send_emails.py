@@ -230,8 +230,10 @@ def html_wrap(text, site_url, link='', prop=None):
     body = (text or '').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
     body = body.replace('\n', '<br>')
     host = (site_url or '').replace('https://', '').replace('http://', '').rstrip('/')
+    # Fondo transparente: así el logo se funde con la cabecera en modo claro
+    # y en modo oscuro, sin dejar un rectángulo de otro color.
     logo = (os.environ.get('LOGO_URL')
-            or 'https://architectshouse-78dd4.web.app/logo-ah-dark.png').strip()
+            or 'https://architectshouse-78dd4.web.app/logo-ah.png').strip()
     cabecera = (f'<img src="{logo}" alt="{BRAND}" width="205" height="32" '
                 'style="width:205px;height:32px;display:block;border:0" />'
                 if logo.startswith('http')

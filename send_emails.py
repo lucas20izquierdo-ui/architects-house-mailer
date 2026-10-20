@@ -234,12 +234,18 @@ def html_wrap(text, site_url, link='', prop=None):
     # y en modo oscuro, sin dejar un rectángulo de otro color.
     logo = (os.environ.get('LOGO_URL')
             or 'https://architectshouse-78dd4.web.app/logo-ah-claro.png').strip()
-    # height:auto + max-width:100% -> nunca se deforma ni se sale en el móvil.
-    cabecera = (f'<img src="{logo}" alt="{BRAND}" width="250" height="26" '
-                'style="width:250px;max-width:100%;height:auto;display:block;border:0" />'
-                if logo.startswith('http')
-                else '<span style="font-family:Georgia,\'Times New Roman\',serif;'
-                     'font-size:21px;letter-spacing:.2px">Architect’s<i>House</i></span>')
+    # El logo va dentro de una tabla que ocupa el 58% de la cabecera y la imagen
+    # rellena esa tabla al 100%. Así, sea cual sea el ancho del móvil, el logo
+    # guarda la proporción y nunca se estira de borde a borde.
+    if logo.startswith('http'):
+        cabecera = ('<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
+                    'class="ah-logo" style="width:58%%;max-width:250px">'
+                    '<tr><td><img src="%s" alt="%s" width="1434" height="151" '
+                    'style="width:100%%;height:auto;display:block;border:0" /></td></tr></table>'
+                    % (logo, BRAND))
+    else:
+        cabecera = ('<span style="font-family:Georgia,\'Times New Roman\',serif;'
+                    'font-size:21px;letter-spacing:.2px">Architect’s<i>House</i></span>')
     img = hero_image(prop)
     hero = ('<tr><td><img src="%s" alt="" style="width:100%%;display:block;'
             'max-height:240px;object-fit:cover"></td></tr>' % img) if img else ''
@@ -247,13 +253,16 @@ def html_wrap(text, site_url, link='', prop=None):
              'background:#1b1b19;color:#ffffff;text-decoration:none;padding:12px 22px;'
              'border-radius:8px;font-size:14px">Open your stay page</a></td></tr>' % link) if link else ''
     return ('<div style="background:#f4f2ec;padding:26px 12px">'
+            '<style>@media only screen and (max-width:620px){'
+            '.ah-card{width:100%!important} .ah-logo{width:72%!important}'
+            '.ah-pad{padding-left:20px!important;padding-right:20px!important}}</style>'
             '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
             '<tr><td align="center">'
             '<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" '
-            'style="width:600px;max-width:100%;background:#ffffff;border-radius:14px;'
+            'class="ah-card" style="width:600px;max-width:100%;background:#ffffff;border-radius:14px;'
             'overflow:hidden;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;'
             'color:#1b1b19;text-align:left">'
-            f'<tr><td style="background:#1b1b19;padding:20px 30px;color:#ffffff">{cabecera}</td></tr>'
+            f'<tr><td class="ah-pad" style="background:#1b1b19;padding:20px 30px;color:#ffffff">{cabecera}</td></tr>'
             f'{hero}'
             f'<tr><td style="padding:28px 30px 18px;font-size:15px;line-height:1.75">{body}</td></tr>'
             f'{boton}'

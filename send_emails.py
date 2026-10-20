@@ -250,9 +250,10 @@ def html_wrap(text, site_url, link='', prop=None):
     else:
         cabecera = ('<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
                     'class="ah-logo"><tr>'
-                    '<td style="width:20px;height:20px;background:#B8956A;border-radius:3px;'
-                    'line-height:20px;font-size:1px">&nbsp;</td>'
-                    '<td class="ah-word" style="padding-left:11px;font-family:Georgia,'
+                    '<td style="font-family:Georgia,\'Times New Roman\',Times,serif;'
+                    'font-size:15px;line-height:1;letter-spacing:2px;color:#B8956A;'
+                    'border:1px solid #B8956A;border-radius:2px;padding:5px 8px">AH</td>'
+                    '<td class="ah-word" style="padding-left:13px;font-family:Georgia,'
                     "'Times New Roman',Times,serif;font-size:25px;line-height:1.15;"
                     'letter-spacing:.2px;color:#ffffff;white-space:nowrap">'
                     "Architect’s<span style=\"font-style:italic\">House</span></td>"
@@ -285,7 +286,7 @@ def html_wrap(text, site_url, link='', prop=None):
             'color:#1b1b19;text-align:left">'
             f'<tr><td class="ah-pad" style="background-color:#1b1b19;'
             'background-image:linear-gradient(#1b1b19,#1b1b19);'
-            'padding:20px 30px;color:#ffffff">{cabecera}</td></tr>'
+            f'padding:20px 30px;color:#ffffff">{cabecera}</td></tr>'
             f'{hero}'
             f'<tr><td style="padding:28px 30px 18px;font-size:15px;line-height:1.75">{body}</td></tr>'
             f'{boton}'

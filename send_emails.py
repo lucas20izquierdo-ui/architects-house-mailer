@@ -346,7 +346,7 @@ def test_all_mode(fs, api, frm, site, reply, dry, test_to):
         prop_id, prop = 'DEMO', {'name': "Maison du Lac", 'checkin': '16:00', 'checkout': '11:00'}
     log('Alojamiento de ejemplo: %s' % prop.get('name', prop_id))
 
-    dest = (test_to or '').strip()
+    dest = (test_to or '').strip().lower()
     if not dest:
         log('Para este modo hay que indicar un correo: variable TEST_TO o: python send_emails.py --test-all tu@correo.com')
         return 2
@@ -508,7 +508,9 @@ def main():
     site = os.environ.get('SITE_URL') or 'https://architectshouse-78dd4.web.app'
     reply = os.environ.get('REPLY_TO') or None
     catchup = int(os.environ.get('CATCHUP_DAYS', '2') or 2)
-    test_to = (os.environ.get('TEST_TO') or '').strip()   # modo prueba
+    # Se normaliza a minúsculas: Resend compara la dirección tal cual y
+    # rechaza "Lucas20.…" si la cuenta es "lucas20.…".
+    test_to = (os.environ.get('TEST_TO') or '').strip().lower()   # modo prueba
     if test_to:
         log('MODO PRUEBA ACTIVADO: todos los correos irán a %s' % test_to)
         log('(no se guarda registro, así que luego se volverán a enviar de verdad)')

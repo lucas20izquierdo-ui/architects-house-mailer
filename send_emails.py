@@ -233,9 +233,10 @@ def html_wrap(text, site_url, link='', prop=None):
     # Fondo transparente: así el logo se funde con la cabecera en modo claro
     # y en modo oscuro, sin dejar un rectángulo de otro color.
     logo = (os.environ.get('LOGO_URL')
-            or 'https://architectshouse-78dd4.web.app/logo-ah.png').strip()
-    cabecera = (f'<img src="{logo}" alt="{BRAND}" width="205" height="32" '
-                'style="width:205px;height:32px;display:block;border:0" />'
+            or 'https://architectshouse-78dd4.web.app/logo-ah-claro.png').strip()
+    # height:auto + max-width:100% -> nunca se deforma ni se sale en el móvil.
+    cabecera = (f'<img src="{logo}" alt="{BRAND}" width="250" height="26" '
+                'style="width:250px;max-width:100%;height:auto;display:block;border:0" />'
                 if logo.startswith('http')
                 else '<span style="font-family:Georgia,\'Times New Roman\',serif;'
                      'font-size:21px;letter-spacing:.2px">Architect’s<i>House</i></span>')

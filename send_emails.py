@@ -146,7 +146,7 @@ class Firestore:
         return out
 
     def get(self, path, timeout=25):
-        res = self._call('/' + path, timeout=timeout)
+        res = self._call('/' + urllib.parse.quote(path, safe='/'), timeout=timeout)
         if '__error__' in res: return None
         return self.decode_fields(res.get('fields', {}))
 
@@ -419,13 +419,13 @@ def pick_template(settings, key, lang='en'):
     except Exception:
         e = {}
     idi = str(lang or 'en').split('-')[0].lower()
+    limpio = lambda t: t if (t is not None and str(t).strip()) else None
     if idi in ('es', 'fr', 'it'):
-        if e.get('s_' + idi) is not None and str(e.get('s_' + idi)).strip():
-            return e.get('s_' + idi), e.get('b_' + idi) or ''
-        return DEFAULT.get(idi, DEFAULT['en']).get(key, ('', ''))
-    if e.get('s') is not None and str(e.get('s')).strip():
-        return e.get('s'), e.get('b') or ''
-    return DEFAULT['en'].get(key, ('', ''))
+        fab = DEFAULT.get(idi, DEFAULT['en']).get(key, ('', ''))
+        return (limpio(e.get('s_' + idi)) or fab[0],
+                limpio(e.get('b_' + idi)) or fab[1])
+    fab = DEFAULT['en'].get(key, ('', ''))
+    return limpio(e.get('s')) or fab[0], limpio(e.get('b')) or fab[1]
 
 def due_messages(reservations, props, settings, site_url, today=None, catchup=2,
                 hour=None):
@@ -568,7 +568,7 @@ def check_mode():
     api = os.environ.get('RESEND_API_KEY')
     frm = os.environ.get('FROM_EMAIL')
     ok = True
-    log('[1/4] Comprobando secretos…')
+    log('[1/5] Comprobando secretos…')
     for n, v in (('FIREBASE_SA_JSON', sa), ('RESEND_API_KEY', api), ('FROM_EMAIL', frm)):
         estado = 'OK' if v else 'FALTA'
         if not v: ok = False
@@ -577,7 +577,7 @@ def check_mode():
         log('\nFaltan secretos. Créalos en Settings → Secrets and variables → Actions.')
         return 2
 
-    log('[2/4] Validando el JSON de Firebase…')
+    log('[2/5] Validando el JSON de Firebase…')
     try:
         info = json.loads(sa)
         log('      proyecto: %s' % info.get('project_id'))
@@ -586,7 +586,7 @@ def check_mode():
         log('      JSON inválido: %s' % e)
         return 3
 
-    log('[3/4] Conectando con Firestore…')
+    log('[3/5] Conectando con Firestore…')
     fs = Firestore(sa)
     props = dict((i, d) for i, d in fs.docs('props'))
     res = fs.docs('reservations')
@@ -596,7 +596,7 @@ def check_mode():
         log('      AVISO: no he leído nada. Revisa permisos del service account.')
         ok = False
 
-    log('[4/4] Comprobando la clave de Resend…')
+    log('[4/5] Comprobando la clave de Resend…')
     req = urllib.request.Request('https://api.resend.com/domains',
                                  headers={'Authorization': 'Bearer ' + api, 'User-Agent': UA},
                                  method='GET')
@@ -621,6 +621,24 @@ def check_mode():
             ok = False
     except Exception as e:
         log('      no se pudo comprobar: %s' % e)
+
+    log('[5/5] Revisando las plantillas guardadas…')
+    try:
+        ajustes = fs.get('private/data/meta/main').get('settings') or {}
+        emails = ajustes.get('emails') or {}
+        for k in sorted(emails.keys()):
+            e = emails[k] or {}
+            for campo, que in (('s', 'asunto'), ('b', 'cuerpo')):
+                if not str(e.get(campo) or '').strip():
+                    log('      AVISO: %s · %s vacío -> se usará el texto de fábrica' % (k, que))
+                    ok = False
+            for lg in ('es', 'fr', 'it'):
+                if e.get('s_' + lg) is not None and not str(e.get('b_' + lg) or '').strip():
+                    log('      AVISO: %s · cuerpo en %s vacío -> se usará el de fábrica' % (k, lg))
+                    ok = False
+        log('      %d plantilla(s) revisada(s)' % len(emails))
+    except Exception as e:
+        log('      no se han podido revisar: %s' % e)
 
     log('\nRESULTADO: %s' % ('todo correcto, ya puedes enviar' if ok else 'hay algo que arreglar'))
     return 0 if ok else 4
@@ -729,6 +747,7 @@ def procesar_outbox(fs, api, frm, site, reply, dry, test_to):
 # El programa se ejecuta cada 5 minutos. El candado dura 4: lo justo para que
 # dos pasadas no se pisen, sin retrasar la confirmación de una reserva.
 ESPERA_ENTRE_ENVIOS = 4           # minutos mínimos entre dos pasadas con correo
+MAX_POR_PASADA      = 10          # tope de correos por pasada (red de seguridad)
 
 
 def reclamar_turno(fs, minutos=ESPERA_ENTRE_ENVIOS):
@@ -856,6 +875,7 @@ def main():
         pend = nocturnos
     # Candado: si otra pasada acaba de enviar, ésta se aparta. Así nadie
     # recibe el mismo correo dos veces cuando GitHub lanza dos ejecuciones.
+    sin_anotar = 0
     if not dry and not test_to and not reclamar_turno(fs):
         log('[5/5] Otra ejecución ha enviado correos hace menos de %d minutos:' % ESPERA_ENTRE_ENVIOS)
         log('      esta pasada no manda nada (los calendarios sí se sincronizan).')
@@ -865,7 +885,7 @@ def main():
 
     log('[5/5] Mensajes que tocan hoy: %d%s' % (len(pend), '  (DRY RUN)' if dry else ''))
 
-    sent = skipped = failed = 0
+    sent = skipped = failed = vacios = 0
     for m in pend:
         rid = m['res'].get('id', '')
         if not dry and not test_to and fs.get('mail_log/%s_%s' % (rid, m['key'])) is not None:
@@ -874,15 +894,37 @@ def main():
             continue
         dest   = test_to or m['to']
         asunto = ('[PRUEBA] ' + m['subject']) if test_to else m['subject']
+        # Nunca se manda un correo en blanco: si la plantilla se ha quedado sin
+        # texto se avisa y se deja para la siguiente pasada. Así se evitan los
+        # correos vacíos que llegaban una y otra vez.
+        if not str(m['subject'] or '').strip() or not str(m['body'] or '').strip():
+            vacios += 1
+            log('  ! %s %s -> la plantilla esta vacia: NO envio nada' % (rid, m['key']))
+            log('    (Ajustes -> Email templates: reescribela o dejala en blanco')
+            log('     para que se use el texto de fabrica)')
+            continue
+        if sent >= MAX_POR_PASADA:
+            log('  · %s %s -> para la siguiente pasada (tope de %d por pasada)'
+                % (rid, m['key'], MAX_POR_PASADA))
+            continue
         ok, info = send_resend(api, frm, dest, asunto, m['body'], site, reply, dry,
-                                     m.get('link', ''), m.get('prop'))
+                                     m.get('link', ''), m.get('prop'), m.get('lang'))
         if ok:
             sent += 1
             if not dry and not test_to:
-                fs.set('mail_log', '%s_%s' % (rid, m['key']), {
-                    'resId': rid, 'key': m['key'], 'to': dest, 'subject': asunto,
-                    'date': TODAY().isoformat(), 'sentAt': dt.datetime.now(TZ).isoformat(),
-                    'provider': 'resend', 'msgId': info, 'status': 'sent'})
+                clave = '%s_%s' % (rid, m['key'])
+                datos = {'resId': rid, 'key': m['key'], 'to': dest, 'subject': asunto,
+                         'date': TODAY().isoformat(), 'sentAt': dt.datetime.now(TZ).isoformat(),
+                         'provider': 'resend', 'msgId': info, 'status': 'sent'}
+                r = fs.set('mail_log', clave, datos)
+                if (not r) or ('__error__' in r):
+                    r = fs.set('mail_log', clave, {'resId': rid, 'key': m['key'],
+                                                   'to': dest, 'status': 'sent'})
+                if (not r) or ('__error__' in r):
+                    sin_anotar += 1
+                    log('  !! ENVIADO pero NO anotado en el registro: %s' % clave)
+                    log('     %s' % ((r or {}).get('__detail__') or (r or {}).get('__error__')))
+                    log('     Sin esa anotacion el correo se repetiria.')
             log('  ✓ %s %s -> %s%s' % (rid, m['key'], dest, '  [PRUEBA]' if test_to else ''))
         else:
             failed += 1
@@ -894,6 +936,10 @@ def main():
 
     log('Resumen: %d enviados · %d ya enviados · %d fallidos · %d de la bandeja' %
         (sent, skipped, failed, cola))
+    if vacios:
+        log('AVISO: %d mensaje(s) NO enviados porque su plantilla esta vacia.' % vacios)
+    if sin_anotar:
+        log('AVISO: %d mensaje(s) enviados que no se han podido anotar.' % sin_anotar)
     return 0
 
 if __name__ == '__main__':

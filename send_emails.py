@@ -112,7 +112,20 @@ class Firestore:
         if isinstance(v, bool): return {'booleanValue': v}
         if isinstance(v, int): return {'integerValue': str(v)}
         if isinstance(v, float): return {'doubleValue': v}
+        if isinstance(v, dict):
+            return {'mapValue': {'fields': dict((str(k), Firestore.encode_value(x))
+                                                for k, x in v.items())}}
+        if isinstance(v, (list, tuple)):
+            return {'arrayValue': {'values': [Firestore.encode_value(x) for x in v]}}
         return {'stringValue': str(v)}
+
+    def patch(self, path, campos, timeout=25):
+        """Actualiza sólo los campos indicados, sin tocar el resto del documento."""
+        mask = '&'.join('updateMask.fieldPaths=' + urllib.parse.quote(c, safe='')
+                        for c in campos)
+        body = {'fields': {k: self.encode_value(v) for k, v in campos.items()}}
+        return self._call('/' + path + '?' + mask, method='PATCH', body=body,
+                          timeout=timeout)
 
     # --- operaciones ----------------------------------------------------------
     def docs(self, collection, timeout=25):
@@ -493,6 +506,57 @@ def check_mode():
     log('\nRESULTADO: %s' % ('todo correcto, ya puedes enviar' if ok else 'hay algo que arreglar'))
     return 0 if ok else 4
 
+def procesar_outbox(fs, api, frm, site, reply, dry, test_to):
+    """Envía lo que la web ha dejado en cola (panel → outbox).
+
+    Es el correo del 10 % que se entrega al apuntarse al boletín: la web lo
+    anota en private/data/meta/main → outbox y aquí sale por Resend, con el
+    mismo diseño y el mismo remitente que todos los demás.
+    """
+    meta = fs.get('private/data/meta/main') or {}
+    outbox = meta.get('outbox') or []
+    if not isinstance(outbox, list) or not outbox:
+        return 0
+    pend = [m for m in outbox if isinstance(m, dict)
+            and str(m.get('status', 'queued')) != 'sent'
+            and '@' in str(m.get('to') or '')]
+    if not pend:
+        return 0
+    log('[cola] %d mensaje(s) pendiente(s) en la bandeja de salida' % len(pend))
+    enviados = fallidos = 0
+    cambiado = False
+    for m in pend:
+        clave = 'outbox_' + str(m.get('id') or ('%s_%s' % (m.get('to'), m.get('date'))))
+        if fs.get('mail_log/' + clave) is not None:
+            m['status'] = 'sent'; cambiado = True
+            continue
+        dest   = test_to or m['to']
+        asunto = str(m.get('subject') or '')
+        if test_to: asunto = '[PRUEBA] ' + asunto
+        ok, info = send_resend(api, frm, dest, asunto, str(m.get('body') or ''),
+                               site, reply, dry)
+        if ok:
+            enviados += 1
+            if not dry and not test_to:
+                fs.set('mail_log', clave, {
+                    'resId': '', 'key': m.get('key', 'welcome'), 'to': dest,
+                    'subject': asunto, 'date': TODAY().isoformat(),
+                    'sentAt': dt.datetime.now(TZ).isoformat(),
+                    'provider': 'resend', 'msgId': info, 'status': 'sent'})
+            m['status'] = 'sent'
+            m['date'] = TODAY().isoformat()
+            cambiado = True
+            log('  \u2713 cola %s \u2192 %s%s' % (m.get('key') or '?', dest,
+                                              '  [PRUEBA]' if test_to else ''))
+        else:
+            fallidos += 1
+            log('  \u2717 cola %s \u2192 %s: %s' % (m.get('key') or '?', dest, info))
+    if cambiado and not dry:
+        fs.patch('private/data/meta/main', {'outbox': outbox})
+    log('Bandeja de salida: %d enviados \u00b7 %d fallidos' % (enviados, fallidos))
+    return enviados
+
+
 def main():
     if '--selftest' in sys.argv: return selftest()
     if '--check' in sys.argv:    return check_mode()
@@ -583,7 +647,10 @@ def main():
             failed += 1
             log('  ✗ %s %s -> %s: %s' % (rid, m['key'], dest, info))
 
-    log('Resumen: %d enviados · %d ya enviados · %d fallidos' % (sent, skipped, failed))
+    cola = procesar_outbox(fs, api, frm, site, reply, dry, test_to)
+
+    log('Resumen: %d enviados · %d ya enviados · %d fallidos · %d de la bandeja' %
+        (sent, skipped, failed, cola))
     return 0
 
 if __name__ == '__main__':

@@ -3,11 +3,4 @@ VERSION:2.0
 CALSCALE:GREGORIAN
 PRODID:-//ArchitectsHouse//iCal sync//EN
 X-WR-CALNAME:Atelier Vieille Ville — no disponible
-BEGIN:VEVENT
-UID:ah-2026-10-22@architectshouse-78dd4.web.app
-DTSTAMP:20261021T220539Z
-DTSTART;VALUE=DATE:20261022
-DTEND;VALUE=DATE:20261024
-SUMMARY:Atelier Vieille Ville — no disponible
-END:VEVENT
 END:VCALENDAR

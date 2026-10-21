@@ -2,16 +2,20 @@ name: Send guest emails
 
 on:
   schedule:
-    # Cada hora, las 24 h (UTC). Antes se paraba por la noche y una reserva
-    # de Airbnb hecha a las 23:00 no se bloqueaba en la web hasta las 08:00.
-    # De noche el programa sincroniza calendarios y manda confirmaciones;
-    # el resto de correos espera a la manana (lo decide send_emails.py).
-    # El repositorio es publico: los minutos de GitHub Actions son GRATIS.
-    - cron: '10 * * * *'
+    # Cada 5 minutos, las 24 horas del día. 5 minutos es el intervalo más
+    # corto que permite GitHub: así la confirmación de una reserva sale
+    # casi al momento, sea la hora que sea (incluida la madrugada).
+    # Los calendarios, en cambio, se sincronizan una vez por hora:
+    # no tiene sentido descargar los de Airbnb/Booking 288 veces al día.
+    - cron: '*/5 * * * *'
   workflow_dispatch:
     inputs:
       test_all:
-        description: 'Probar: enviar los 7 correos (confirm, before, checkin, during, departure, after, review)'
+        description: 'Prueba: enviar los 7 correos (confirm, before, checkin, during, departure, after, review)'
+        type: boolean
+        default: false
+      force:
+        description: 'Enviar ahora: ignora la espera anti-duplicados y sincroniza los calendarios'
         type: boolean
         default: false
 
@@ -40,6 +44,12 @@ jobs:
           FROM_EMAIL:       ${{ secrets.FROM_EMAIL }}
         run: timeout 180 python send_emails.py --check
 
+      # ¿Le toca sincronizar los calendarios? Solo los 8 primeros minutos de
+      # cada hora (una vez por hora) o si lo pides al lanzarlo a mano.
+      - name: Decide whether to sync calendars
+        id: ical
+        run: echo "toca=$([ $(date +\%M) -lt 8 ] && echo si || echo no)" >> $GITHUB_OUTPUT
+
       - name: Send scheduled emails
         env:
           PYTHONUNBUFFERED: '1'
@@ -51,6 +61,7 @@ jobs:
           DRY_RUN:          ${{ vars.DRY_RUN }}
           TEST_TO:          ${{ vars.TEST_TO }}
           LOGO_URL:         ${{ vars.LOGO_URL }}
+          FORCE:            ${{ github.event.inputs.force }}
         run: |
           if [ "${{ inputs.test_all }}" = "true" ]; then
             timeout 300 python send_emails.py --test-all
@@ -62,6 +73,7 @@ jobs:
       # Importa el calendario de Airbnb / Booking.com y bloquea esas fechas
       # en la web; y publica en ical/ el calendario de tus reservas.
       - name: Sync iCal calendars
+        if: steps.ical.outputs.toca == 'si' || github.event.inputs.force == 'true'
         continue-on-error: true
         env:
           PYTHONUNBUFFERED: '1'
@@ -69,6 +81,7 @@ jobs:
         run: timeout 180 python ical_sync.py
 
       - name: Publish iCal feeds
+        if: steps.ical.outputs.toca == 'si' || github.event.inputs.force == 'true'
         run: |
           git config user.name  "AH iCal bot"
           git config user.email "ical@architectshouse.local"

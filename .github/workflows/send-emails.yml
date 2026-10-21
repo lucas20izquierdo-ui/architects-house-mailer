@@ -2,8 +2,12 @@ name: Send guest emails
 
 on:
   schedule:
-    # UTC: de 06:10 a 20:10 -> 08:10-22:10 en verano, 07:10-21:10 en invierno (hora Suiza)
-    - cron: '10 6-20 * * *'
+    # Cada hora, las 24 h (UTC). Antes se paraba por la noche y una reserva
+    # de Airbnb hecha a las 23:00 no se bloqueaba en la web hasta las 08:00.
+    # De noche el programa sincroniza calendarios y manda confirmaciones;
+    # el resto de correos espera a la manana (lo decide send_emails.py).
+    # El repositorio es publico: los minutos de GitHub Actions son GRATIS.
+    - cron: '10 * * * *'
   workflow_dispatch:
     inputs:
       test_all:

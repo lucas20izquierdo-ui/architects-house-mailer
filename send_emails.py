@@ -185,9 +185,22 @@ def ahora_local():
         return dt.datetime.now(ZoneInfo('Europe/Zurich'))
     except Exception:
         return dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=2)
-MESES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto',
-         'septiembre','octubre','noviembre','diciembre']
-DIAS = ['lunes','martes','miércoles','jueves','viernes','sábado','domingo']
+MESES = {
+    'es': ['enero','febrero','marzo','abril','mayo','junio','julio','agosto',
+           'septiembre','octubre','noviembre','diciembre'],
+    'en': ['January','February','March','April','May','June','July',
+           'August','September','October','November','December'],
+    'fr': ['janvier','février','mars','avril','mai','juin','juillet',
+           'août','septembre','octobre','novembre','décembre'],
+    'it': ['gennaio','febbraio','marzo','aprile','maggio','giugno','luglio',
+           'agosto','settembre','ottobre','novembre','dicembre'],
+}
+DIAS = {
+    'es': ['lunes','martes','miércoles','jueves','viernes','sábado','domingo'],
+    'en': ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'],
+    'fr': ['lundi','mardi','mercredi','jeudi','vendredi','samedi','dimanche'],
+    'it': ['lunedì','martedì','mercoledì','giovedì','venerdì','sabato','domenica'],
+}
 
 def parse_date(s):
     if not s: return None
@@ -196,22 +209,30 @@ def parse_date(s):
     try: return dt.date.fromisoformat(str(s)[:10])
     except ValueError: return None
 
-def fmt_long(d):
+def fmt_long(d, lang=None):
+    """Fecha larga en el idioma del huésped (si no se sabe, en inglés)."""
     if not d: return ''
-    return f'{DIAS[d.weekday()]}, {d.day} de {MESES[d.month-1]} de {d.year}'
+    L = str(lang or 'en').split('-')[0].lower()
+    if L not in MESES: L = 'en'
+    dia, mes = DIAS[L][d.weekday()], MESES[L][d.month - 1]
+    if L == 'en': return f'{dia}, {mes} {d.day}, {d.year}'
+    if L == 'fr': return f'{dia} {d.day} {mes} {d.year}'
+    if L == 'it': return f'{dia} {d.day} {mes} {d.year}'
+    return f'{dia}, {d.day} de {mes} de {d.year}'
 
 def chf(n):
     try: n = float(n)
     except (TypeError, ValueError): n = 0
     return 'CHF ' + f'{round(n):,}'.replace(',', "'")
 
-def render(tpl, r, p, site_url):
+def render(tpl, r, p, site_url, lang=None):
     if tpl is None: return ''
+    idi = str(lang or r.get('lang') or 'en').split('-')[0].lower()
     vals = {
         'guest':        str(r.get('first', '') or ''),
         'property':     p.get('name', '') or '',
-        'checkin':      fmt_long(parse_date(r.get('ci'))),
-        'checkout':     fmt_long(parse_date(r.get('co'))),
+        'checkin':      fmt_long(parse_date(r.get('ci')), idi),
+        'checkout':     fmt_long(parse_date(r.get('co')), idi),
         'checkintime':  p.get('checkin', '') or '',
         'checkouttime': p.get('checkout', '') or '',
         'total':        chf(r.get('total')),
@@ -321,6 +342,7 @@ def due_messages(reservations, props, settings, site_url, today=None, catchup=2,
         email = (r.get('email') or '').strip()
         if not email or '@' not in email: continue
         p = props.get(r.get('propId'), {})
+        idi = str(r.get('lang') or 'en').split('-')[0].lower()
         ci, co = parse_date(r.get('ci')), parse_date(r.get('co'))
         if not ci or not co: continue
         noches = (co - ci).days
@@ -328,7 +350,7 @@ def due_messages(reservations, props, settings, site_url, today=None, catchup=2,
         if created and 0 <= (today - created).days <= catchup:
             s, b = pick_template(settings, 'confirm')
             out.append(dict(key='confirm', res=r, prop=p, to=email,
-                            subject=render(s, r, p, site_url), body=render(b, r, p, site_url),
+                            subject=render(s, r, p, site_url, idi), body=render(b, r, p, site_url, idi),
                             link=stay_link(r, site_url)))
         for key, (field, delta) in OFFSETS.items():
             if hour is not None and HORA.get(key, 0) > hour: continue
@@ -340,7 +362,7 @@ def due_messages(reservations, props, settings, site_url, today=None, catchup=2,
             if lag > 0 and (co + dt.timedelta(days=3)) < today: continue
             s, b = pick_template(settings, key)
             out.append(dict(key=key, res=r, prop=p, to=email,
-                            subject=render(s, r, p, site_url), body=render(b, r, p, site_url),
+                            subject=render(s, r, p, site_url, idi), body=render(b, r, p, site_url, idi),
                             link=stay_link(r, site_url)))
     return out
 

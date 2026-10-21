@@ -644,6 +644,20 @@ def main():
     log('      hora local Suiza: %s' % ahora.strftime('%H:%M'))
     pend = due_messages(reservations, props, settings, site, catchup=catchup,
                         hour=ahora.hour)
+
+    # --- Horario de cortesía --------------------------------------------------
+    # El programa se ejecuta cada hora, también de noche, para que los
+    # calendarios estén al día. Pero de noche (22:00-07:59 hora de Suiza)
+    # SÓLO se envían mensajes que el huésped espera en ese instante:
+    # la confirmación de su reserva y el código de descuento.
+    # El resto se aplaza a la mañana siguiente (nada se pierde: la ventana
+    # de recuperación es de 2 días).
+    if not (8 <= ahora.hour <= 21):
+        nocturnos = [m for m in pend if m.get('key') == 'confirm']
+        if len(nocturnos) != len(pend):
+            log('      (%d mensaje(s) aplazado(s) a la manana: es de noche)'
+                % (len(pend) - len(nocturnos)))
+        pend = nocturnos
     log('[5/5] Mensajes que tocan hoy: %d%s' % (len(pend), '  (DRY RUN)' if dry else ''))
 
     sent = skipped = failed = 0

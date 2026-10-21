@@ -669,6 +669,21 @@ def procesar_outbox(fs, api, frm, site, reply, dry, test_to):
         if not isinstance(m, dict): continue
         if str(m.get('status', 'queued')) == 'sent': continue
         if '@' not in str(m.get('to') or ''): continue
+        # Las confirmaciones las manda el bucle principal: si la web dejó una
+        # en cola, se descarta (si no, el huésped recibe dos correos).
+        if str(m.get('key') or '') == 'confirm':
+            if not dry:
+                try: fs.patch('outbox/' + str(did), {'status': 'skipped'})
+                except Exception: pass
+            continue
+        cuerpo = str(m.get('body') or '').strip()
+        if not cuerpo or not str(m.get('subject') or '').strip():
+            log('  \u26a0 cola p\u00fablica %s \u2192 %s: sin texto, NO lo env\u00edo'
+                % (m.get('key') or '?', m.get('to')))
+            if not dry:
+                try: fs.patch('outbox/' + str(did), {'status': 'skipped'})
+                except Exception: pass
+            continue
         clave = 'outbox_' + str(did)
         if fs.get('mail_log/' + clave) is not None:
             if not dry:
@@ -678,7 +693,7 @@ def procesar_outbox(fs, api, frm, site, reply, dry, test_to):
         dest   = test_to or m.get('to')
         asunto = str(m.get('subject') or '')
         if test_to: asunto = '[PRUEBA] ' + asunto
-        ok, info = send_resend(api, frm, dest, asunto, str(m.get('body') or ''),
+        ok, info = send_resend(api, frm, dest, asunto, cuerpo,
                                site, reply, dry, '', None, m.get('lang'))
         if ok:
             enviados += 1
@@ -703,13 +718,27 @@ def procesar_outbox(fs, api, frm, site, reply, dry, test_to):
     outbox = meta.get('outbox') or []
     if isinstance(outbox, list) and outbox:
         pend = [m for m in outbox if isinstance(m, dict)
-                and str(m.get('status', 'queued')) != 'sent'
+                and str(m.get('status', 'queued')) not in ('sent', 'skipped')
                 and '@' in str(m.get('to') or '')]
         if pend:
             log('[cola] %d mensaje(s) pendiente(s) en la bandeja de salida' % len(pend))
         env2 = fall2 = 0
         cambiado = False
         for m in pend:
+            # Las confirmaciones las manda el bucle principal: las que haya en
+            # la bandeja se retiran (si no, el huésped recibe dos correos).
+            if str(m.get('key') or '') == 'confirm':
+                m['status'] = 'skipped'
+                m['nota'] = 'la confirmaci\u00f3n la env\u00eda el programa'
+                cambiado = True
+                continue
+            cuerpo = str(m.get('body') or '').strip()
+            if not cuerpo or not str(m.get('subject') or '').strip():
+                log('  \u26a0 cola %s \u2192 %s: sin texto, NO lo env\u00edo'
+                    % (m.get('key') or '?', m.get('to')))
+                m['status'] = 'skipped'; m['nota'] = 'sin texto'
+                cambiado = True
+                continue
             clave = 'outbox_' + str(m.get('id') or ('%s_%s' % (m.get('to'), m.get('date'))))
             if fs.get('mail_log/' + clave) is not None:
                 m['status'] = 'sent'; cambiado = True
@@ -717,7 +746,7 @@ def procesar_outbox(fs, api, frm, site, reply, dry, test_to):
             dest   = test_to or m['to']
             asunto = str(m.get('subject') or '')
             if test_to: asunto = '[PRUEBA] ' + asunto
-            ok, info = send_resend(api, frm, dest, asunto, str(m.get('body') or ''),
+            ok, info = send_resend(api, frm, dest, asunto, cuerpo,
                                    site, reply, dry, '', None, m.get('lang'))
             if ok:
                 env2 += 1

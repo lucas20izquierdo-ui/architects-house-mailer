@@ -29,7 +29,11 @@ Variables de entorno (GitHub Secrets):
 import os, sys, json, signal, datetime as dt
 import urllib.request, urllib.error, urllib.parse
 
-TZ = dt.timezone(dt.timedelta(hours=2))
+try:
+    from zoneinfo import ZoneInfo
+    TZ = ZoneInfo('Europe/Zurich')      # hora de Suiza: cambia sola en verano/invierno
+except Exception:
+    TZ = dt.timezone(dt.timedelta(hours=2))
 TODAY = lambda: dt.datetime.now(TZ).date()
 BRAND = "Architect’sHouse"
 WATCHDOG = 240          # segundos máximo de ejecución

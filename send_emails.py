@@ -723,7 +723,9 @@ def procesar_outbox(fs, api, frm, site, reply, dry, test_to):
 
 
 # ------------------------------------------- candado contra los duplicados ---
-ESPERA_ENTRE_ENVIOS = 15          # minutos mínimos entre dos pasadas con correo
+# El programa se ejecuta cada 5 minutos. El candado dura 4: lo justo para que
+# dos pasadas no se pisen, sin retrasar la confirmación de una reserva.
+ESPERA_ENTRE_ENVIOS = 4           # minutos mínimos entre dos pasadas con correo
 
 
 def reclamar_turno(fs, minutos=ESPERA_ENTRE_ENVIOS):
@@ -736,6 +738,9 @@ def reclamar_turno(fs, minutos=ESPERA_ENTRE_ENVIOS):
     El sitio se pide ANTES de empezar a mandar, no después: si se pidiera al
     final, la segunda ejecución todavía no vería nada y mandaría lo mismo.
     """
+    if os.environ.get('FORCE'):
+        log('      (me han pedido enviar sin esperar: salto el candado)')
+        return True
     mio = os.urandom(4).hex()
     try:
         ahora = dt.datetime.now(dt.timezone.utc)
@@ -851,8 +856,8 @@ def main():
     if not dry and not test_to and not reclamar_turno(fs):
         log('[5/5] Otra ejecución ha enviado correos hace menos de %d minutos:' % ESPERA_ENTRE_ENVIOS)
         log('      esta pasada no manda nada (los calendarios sí se sincronizan).')
-        log('      Si querías forzar el envío, espera %d minutos y vuelve a darle' % ESPERA_ENTRE_ENVIOS)
-        log('      a Run workflow.')
+        log('      Vuelve a darle a Run workflow dentro de %d minutos, o márcala' % ESPERA_ENTRE_ENVIOS)
+        log('      con la casilla "Send now" para saltarte la espera.')
         return 0
 
     log('[5/5] Mensajes que tocan hoy: %d%s' % (len(pend), '  (DRY RUN)' if dry else ''))

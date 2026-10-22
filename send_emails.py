@@ -37,6 +37,7 @@ except Exception:
     TZ = dt.timezone(dt.timedelta(hours=2))
 TODAY = lambda: dt.datetime.now(TZ).date()
 BRAND = "Architect’sHouse"
+FIRMA_MARCA  = True            # la firma del correo es el nombre de la marca
 WATCHDOG = 240          # segundos máximo de ejecución
 UA = 'architects-house-mailer/1.0'   # Cloudflare bloquea peticiones sin User-Agent
 
@@ -264,6 +265,39 @@ def hero_image(prop):
     return ''
 
 
+DESPEDIDAS = ('un saludo', 'un cordial saludo', 'atentamente', 'muchas gracias',
+              'best regards', 'kind regards', 'warm regards', 'best wishes',
+              'regards', 'sincerely', 'bien à vous', 'bien cordialement',
+              'cordialement', 'à bientôt', 'un cordiale saluto',
+              'cordiali saluti', 'un caro saluto', 'mit freundlichen grüßen')
+
+
+def quitar_firma(texto):
+    """Quita del final las líneas de despedida y de nombre.
+
+    El cuerpo de la plantilla acaba con algo tipo "Un saludo,\nLucas,
+    Architect'sHouse". Como ahora la firma se dibuja con la foto, esas
+    líneas se retiran del correo en HTML para que el nombre no salga
+    dos veces. Si el cuerpo no acaba así, se deja tal cual.
+    """
+    lineas = [l.rstrip() for l in str(texto or '').split('\n')]
+    while lineas and not lineas[-1].strip():
+        lineas.pop()
+    if not lineas:
+        return ''
+    if 'architect' in lineas[-1].lower():
+        lineas.pop()
+        while lineas and not lineas[-1].strip():
+            lineas.pop()
+        if lineas:
+            pen = lineas[-1].strip().lower().rstrip(',;.').strip()
+            if pen in DESPEDIDAS or (len(pen) <= 30 and lineas[-1].strip().endswith(',')):
+                lineas.pop()
+    while lineas and not lineas[-1].strip():
+        lineas.pop()
+    return '\n'.join(lineas)
+
+
 def html_wrap(text, site_url, link='', prop=None, lang='en'):
     """Correo sencillo y limpio: nombre en texto, cuerpo, botón y pie.
 
@@ -271,7 +305,10 @@ def html_wrap(text, site_url, link='', prop=None, lang='en'):
     y en modo oscuro, y nunca aparece un hueco de imagen bloqueada.
     """
     t = TEXTS.get(str(lang or 'en').split('-')[0].lower(), TEXTS['en'])
-    body = (text or '').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    limpio = quitar_firma(text)
+    if not limpio.strip():
+        limpio = (text or '')
+    body = (limpio or '').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
     body = body.replace('\n', '<br>')
     host = (site_url or '').replace('https://', '').replace('http://', '').rstrip('/')
     marca = ('<div style="font-family:Georgia,\'Times New Roman\',Times,serif;font-size:21px;'
@@ -281,6 +318,12 @@ def html_wrap(text, site_url, link='', prop=None, lang='en'):
              'text-decoration:none;padding:12px 22px;border-radius:8px;font-size:14px">'
              '%s</a>' % (link, t['boton'])) if link else ''
     fila_boton = ('<tr><td class="ah-pad" style="padding:2px 30px 28px">%s</td></tr>' % boton) if boton else ''
+    # la firma: el nombre, igual que en la cabecera de la web (sin foto)
+    firma = ('<tr><td class="ah-pad" style="padding:2px 30px 26px;'
+             "font-family:Georgia,'Times New Roman',Times,serif;font-size:20px;"
+             'letter-spacing:-.01em;line-height:1.25;color:#1A1916">'
+             'Architect\u2019s<i style="font-style:italic;color:#80603B">House</i>'
+             '</td></tr>')
     idi = str(lang or 'en').split('-')[0].lower()
     return ('<!doctype html><html lang="%s"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
@@ -301,12 +344,13 @@ def html_wrap(text, site_url, link='', prop=None, lang='en'):
             '<tr><td><div style="border-top:1px solid #efece4"></div></td></tr>'
             '<tr><td class="ah-pad" style="padding:24px 30px 16px;font-size:15px;line-height:1.75">%s</td></tr>'
             '%s'
+            '%s'
             '<tr><td class="ah-pad" style="padding:18px 30px 28px;border-top:1px solid #efece4;'
             'font-size:11px;line-height:1.6;color:#9a9a94">'
             '<b style="color:#6b6b64">%s</b> · %s<br>'
             '%s'
             '</td></tr></table></td></tr></table></body></html>'
-            % (idi, marca, body, fila_boton, BRAND, host, t['pie']))
+            % (idi, marca, body, fila_boton, firma, BRAND, host, t['pie']))
 
 
 # ------------------------------------------------------------------

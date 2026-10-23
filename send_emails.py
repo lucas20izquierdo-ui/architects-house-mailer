@@ -44,6 +44,11 @@ UA = 'architects-house-mailer/1.0'   # Cloudflare bloquea peticiones sin User-Ag
 def log(msg):
     print(msg, flush=True)
 
+
+def como_dic(x):
+    """Un dict siempre: un fallo transitorio de lectura no debe romper nada."""
+    return x if isinstance(x, dict) else {}
+
 # ==================== Firestore por REST (sin librerías pesadas) ==============
 SCOPES = ['https://www.googleapis.com/auth/datastore']
 BASE = 'https://firestore.googleapis.com/v1/projects/{pid}/databases/(default)/documents'
@@ -147,14 +152,28 @@ class Firestore:
         return out
 
     def get(self, path, timeout=25):
+        """None = no existe (404). '__unknown__' = error transitorio (mejor no fiarse)."""
         res = self._call('/' + urllib.parse.quote(path, safe='/'), timeout=timeout)
-        if '__error__' in res: return None
+        if '__error__' in res:
+            return None if res['__error__'] == 404 else '__unknown__'
         return self.decode_fields(res.get('fields', {}))
 
-    def set(self, collection, doc_id, fields, timeout=25):
+    def create(self, collection, doc_id, fields, timeout=25):
+        """Crea el documento SOLO si no existe. Si ya existe llega un error 409."""
         body = {'fields': {k: self.encode_value(v) for k, v in fields.items()}}
         path = '/' + collection + '?documentId=' + urllib.parse.quote(doc_id, safe='')
         return self._call(path, method='POST', body=body, timeout=timeout)
+
+    def set(self, collection, doc_id, fields, timeout=25):
+        """Escribe el documento: lo crea si no existe y lo actualiza si ya existe."""
+        res = self.create(collection, doc_id, fields, timeout)
+        if '__error__' in res and res['__error__'] == 409:
+            return self.patch(collection + '/' + doc_id, fields, timeout)
+        return res
+
+    def delete(self, path, timeout=25):
+        return self._call('/' + urllib.parse.quote(path, safe='/'), method='DELETE',
+                          timeout=timeout)
 
 # ==================== plantillas y formato ====================================
 OFFSETS = {
@@ -539,7 +558,7 @@ def test_all_mode(fs, api, frm, site, reply, dry, test_to):
     """Crea una reserva falsa por cada tipo de correo y la envía a test_to.
     No escribe nada en Firestore: tus datos quedan intactos."""
     props = dict((i, d) for i, d in fs.docs('props'))
-    settings = fs.get('private/data/meta/main').get('settings') or {}
+    settings = como_dic(fs.get('private/data/meta/main')).get('settings') or {}
     if props:
         prop_id, prop = list(props.items())[0]
     else:
@@ -747,7 +766,10 @@ def procesar_outbox(fs, api, frm, site, reply, dry, test_to):
                 except Exception: pass
             continue
         clave = 'outbox_' + str(did)
-        if fs.get('mail_log/' + clave) is not None:
+        prev = fs.get('mail_log/' + clave)
+        if prev == '__unknown__':
+            continue
+        if prev is not None:
             if not dry:
                 try: fs.patch('outbox/' + str(did), {'status': 'sent'})
                 except Exception: pass
@@ -755,6 +777,14 @@ def procesar_outbox(fs, api, frm, site, reply, dry, test_to):
         dest   = test_to or m.get('to')
         asunto = str(m.get('subject') or '')
         if test_to: asunto = '[PRUEBA] ' + asunto
+        if not dry and not test_to:
+            r = fs.create('mail_log', clave, {'resId': '', 'key': m.get('key', 'welcome'),
+                                              'to': dest, 'subject': asunto,
+                                              'date': TODAY().isoformat(),
+                                              'sentAt': dt.datetime.now(TZ).isoformat(),
+                                              'status': 'sending'})
+            if '__error__' in (r or {}):
+                continue
         ok, info = send_resend(api, frm, dest, asunto, cuerpo,
                                site, reply, dry, '', None, m.get('lang'))
         if ok:
@@ -771,12 +801,15 @@ def procesar_outbox(fs, api, frm, site, reply, dry, test_to):
                                               '  [PRUEBA]' if test_to else ''))
         else:
             fallidos += 1
+            if not dry and not test_to:
+                try: fs.delete('mail_log/' + clave)
+                except Exception: pass
             log('  \u2717 cola p\u00fablica %s \u2192 %s: %s' % (m.get('key') or '?', dest, info))
     if cola:
         log('Cola p\u00fablica: %d enviados \u00b7 %d fallidos' % (enviados, fallidos))
 
     # ------------------------------------------------- 2. bandeja del panel ------
-    meta = fs.get('private/data/meta/main') or {}
+    meta = como_dic(fs.get('private/data/meta/main'))
     outbox = meta.get('outbox') or []
     if isinstance(outbox, list) and outbox:
         pend = [m for m in outbox if isinstance(m, dict)
@@ -802,12 +835,23 @@ def procesar_outbox(fs, api, frm, site, reply, dry, test_to):
                 cambiado = True
                 continue
             clave = 'outbox_' + str(m.get('id') or ('%s_%s' % (m.get('to'), m.get('date'))))
-            if fs.get('mail_log/' + clave) is not None:
+            prev = fs.get('mail_log/' + clave)
+            if prev == '__unknown__':
+                continue
+            if prev is not None:
                 m['status'] = 'sent'; cambiado = True
                 continue
             dest   = test_to or m['to']
             asunto = str(m.get('subject') or '')
             if test_to: asunto = '[PRUEBA] ' + asunto
+            if not dry and not test_to:
+                r = fs.create('mail_log', clave, {'resId': '', 'key': m.get('key', 'welcome'),
+                                                  'to': dest, 'subject': asunto,
+                                                  'date': TODAY().isoformat(),
+                                                  'sentAt': dt.datetime.now(TZ).isoformat(),
+                                                  'status': 'sending'})
+                if '__error__' in (r or {}):
+                    continue
             ok, info = send_resend(api, frm, dest, asunto, cuerpo,
                                    site, reply, dry, '', None, m.get('lang'))
             if ok:
@@ -825,6 +869,9 @@ def procesar_outbox(fs, api, frm, site, reply, dry, test_to):
                                                   '  [PRUEBA]' if test_to else ''))
             else:
                 fall2 += 1
+                if not dry and not test_to:
+                    try: fs.delete('mail_log/' + clave)
+                    except Exception: pass
                 log('  \u2717 cola %s \u2192 %s: %s' % (m.get('key') or '?', dest, info))
         if cambiado and not dry:
             fs.patch('private/data/meta/main', {'outbox': outbox})
@@ -857,7 +904,7 @@ def reclamar_turno(fs, minutos=ESPERA_ENTRE_ENVIOS):
     mio = os.urandom(4).hex()
     try:
         ahora = dt.datetime.now(dt.timezone.utc)
-        d = fs.get('mailrun/last') or {}
+        d = como_dic(fs.get('mailrun/last'))
         t = d.get('at')
         if t:
             ult = dt.datetime.fromisoformat(str(t))
@@ -867,7 +914,7 @@ def reclamar_turno(fs, minutos=ESPERA_ENTRE_ENVIOS):
                 return False
         fs.set('mailrun', 'last', {'at': ahora.isoformat(), 'run': mio, 'sent': 0})
         time.sleep(3)                       # por si dos ejecuciones coinciden
-        d2 = fs.get('mailrun/last') or {}
+        d2 = como_dic(fs.get('mailrun/last'))
         return d2.get('run') == mio or not d2.get('run')
     except Exception as e:
         log('  (aviso: no he podido comprobar el turno, sigo igualmente: %s)' % e)
@@ -877,7 +924,7 @@ def reclamar_turno(fs, minutos=ESPERA_ENTRE_ENVIOS):
 def anotar_ejecucion(fs, enviados, hora):
     """Deja constancia de cuánto ha enviado esta pasada."""
     try:
-        d = fs.get('mailrun/last') or {}
+        d = como_dic(fs.get('mailrun/last'))
         d.pop('run', None)
         d['sent'] = enviados
         d['hour'] = hora
@@ -943,7 +990,7 @@ def main():
     log('      %d reservas' % len(reservations))
 
     log('[4/5] Leyendo plantillas…')
-    settings = fs.get('private/data/meta/main').get('settings') or {}
+    settings = como_dic(fs.get('private/data/meta/main')).get('settings') or {}
     log('      plantillas: %s' % (', '.join(sorted((settings.get('emails') or {}).keys())) or 'ninguna (uso las de fábrica)'))
 
     ahora = ahora_local()
@@ -979,8 +1026,16 @@ def main():
     sent = skipped = failed = vacios = 0
     for m in pend:
         rid = m['res'].get('id', '')
+        clave = '%s_%s' % (rid, m['key'])
+        es_reenvio = False
         if not dry and not test_to:
-            prev = fs.get('mail_log/%s_%s' % (rid, m['key']))
+            prev = fs.get('mail_log/' + clave)
+            if prev == '__unknown__':
+                # No puedo comprobar si ya se envió (fallo transitorio):
+                # mejor retrasar el correo que mandarlo dos veces.
+                skipped += 1
+                log('  · no puedo comprobar el registro (error transitorio): %s' % clave)
+                continue
             if prev is not None:
                 pd = str(prev.get('date') or prev.get('sentAt') or '')[:10]
                 rc = str(m['res'].get('created') or '')[:10]
@@ -991,6 +1046,7 @@ def main():
                 # La referencia se reutilizó (reserva anterior borrada con el
                 # mismo id): ese registro es de OTRA reserva y no cuenta.
                 log('  · registro viejo de una reserva borrada con la misma referencia: reenvío %s %s' % (rid, m['key']))
+                es_reenvio = True
         dest   = test_to or m['to']
         asunto = ('[PRUEBA] ' + m['subject']) if test_to else m['subject']
         # Nunca se manda un correo en blanco: si la plantilla se ha quedado sin
@@ -1006,12 +1062,22 @@ def main():
             log('  · %s %s -> para la siguiente pasada (tope de %d por pasada)'
                 % (rid, m['key'], MAX_POR_PASADA))
             continue
+        if not dry and not test_to and not es_reenvio:
+            # Reclamo atómico ANTES de enviar: si el registro ya existe, otra
+            # pasada lo mandó (o lo está mandando) y este correo NO sale otra vez.
+            r = fs.create('mail_log', clave, {'resId': rid, 'key': m['key'], 'to': dest,
+                                              'subject': asunto, 'date': TODAY().isoformat(),
+                                              'sentAt': dt.datetime.now(TZ).isoformat(),
+                                              'status': 'sending'})
+            if '__error__' in (r or {}):
+                skipped += 1
+                log('  · otra pasada se ha adelantado con este correo: %s' % clave)
+                continue
         ok, info = send_resend(api, frm, dest, asunto, m['body'], site, reply, dry,
                                      m.get('link', ''), m.get('prop'), m.get('lang'))
         if ok:
             sent += 1
             if not dry and not test_to:
-                clave = '%s_%s' % (rid, m['key'])
                 datos = {'resId': rid, 'key': m['key'], 'to': dest, 'subject': asunto,
                          'date': TODAY().isoformat(), 'sentAt': dt.datetime.now(TZ).isoformat(),
                          'provider': 'resend', 'msgId': info, 'status': 'sent'}
@@ -1027,6 +1093,11 @@ def main():
             log('  ✓ %s %s -> %s%s' % (rid, m['key'], dest, '  [PRUEBA]' if test_to else ''))
         else:
             failed += 1
+            if not dry and not test_to and not es_reenvio:
+                # El envío falló: libero el reclamo para que la próxima pasada
+                # pueda intentarlo de nuevo.
+                try: fs.delete('mail_log/' + clave)
+                except Exception: pass
             log('  ✗ %s %s -> %s: %s' % (rid, m['key'], dest, info))
 
     cola = procesar_outbox(fs, api, frm, site, reply, dry, test_to)

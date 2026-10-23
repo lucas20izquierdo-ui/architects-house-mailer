@@ -991,6 +991,7 @@ def main():
 
     log('[4/5] Leyendo plantillas…')
     settings = como_dic(fs.get('private/data/meta/main')).get('settings') or {}
+    mail_edits = (settings or {}).get('mailEdits') or {}
     log('      plantillas: %s' % (', '.join(sorted((settings.get('emails') or {}).keys())) or 'ninguna (uso las de fábrica)'))
 
     ahora = ahora_local()
@@ -1047,6 +1048,17 @@ def main():
                 # mismo id): ese registro es de OTRA reserva y no cuenta.
                 log('  · registro viejo de una reserva borrada con la misma referencia: reenvío %s %s' % (rid, m['key']))
                 es_reenvio = True
+        editado = None
+        if not dry and not test_to:
+            ed = (mail_edits or {}).get(clave)
+            if isinstance(ed, dict) and str(ed.get('status', '')) == 'pendiente':
+                try:
+                    m['subject'] = render(ed.get('subject') or m['subject'], m['res'], m.get('prop'), site, m.get('lang'))
+                    m['body'] = render(ed.get('body') or m['body'], m['res'], m.get('prop'), site, m.get('lang'))
+                    editado = clave
+                    log('  · mensaje editado a mano en el panel: %s' % clave)
+                except Exception as e:
+                    log('  (aviso: no he podido aplicar la edicion de %s: %s)' % (clave, e))
         dest   = test_to or m['to']
         asunto = ('[PRUEBA] ' + m['subject']) if test_to else m['subject']
         # Nunca se manda un correo en blanco: si la plantilla se ha quedado sin
@@ -1090,6 +1102,12 @@ def main():
                     log('  !! ENVIADO pero NO anotado en el registro: %s' % clave)
                     log('     %s' % ((r or {}).get('__detail__') or (r or {}).get('__error__')))
                     log('     Sin esa anotacion el correo se repetiria.')
+                if editado:
+                    try:
+                        mail_edits[editado]['status'] = 'usado'
+                        fs.patch('private/data/meta/main', {'settings.mailEdits': mail_edits})
+                    except Exception as e:
+                        log('  (aviso: no he podido marcar la edicion como usada: %s)' % e)
             log('  ✓ %s %s -> %s%s' % (rid, m['key'], dest, '  [PRUEBA]' if test_to else ''))
         else:
             failed += 1

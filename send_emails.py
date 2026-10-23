@@ -175,7 +175,7 @@ HORA = {
     'checkin':    9,    # primera hora de la mañana del día de llegada
     'during':    11,
     'departure': 17,    # la víspera de salir, a última hora de la tarde
-    'after':     12,    # el día de salida, ya pasada la hora de salida
+    'after':     12,    # el día de la salida, ya pasada la hora de salida
     'review':    12,
 }
 
@@ -477,6 +477,9 @@ def due_messages(reservations, props, settings, site_url, today=None, catchup=2,
     out = []
     for r in reservations:
         if str(r.get('status', '')) == 'cancelled': continue
+        # 'pending' = creada pero aún sin cobrar (pago con tarjeta en curso):
+        # no se manda nada hasta que la pasarela la marque como 'paid'.
+        if str(r.get('status', '')) == 'pending': continue
         email = (r.get('email') or '').strip()
         if not email or '@' not in email: continue
         p = props.get(r.get('propId'), {})
@@ -905,7 +908,7 @@ def main():
     faltan = [n for n, v in (('FIREBASE_SA_JSON', sa), ('RESEND_API_KEY', api), ('FROM_EMAIL', frm)) if not v]
     if faltan:
         log('Faltan variables de entorno: ' + ', '.join(faltan))
-        log('Créalas en Settings → Secrets and variables → Actions.')
+        log('Créalos en Settings → Secrets and variables → Actions.')
         return 2
 
     log('[1/5] Conectando con Firestore…')
@@ -961,10 +964,18 @@ def main():
     sent = skipped = failed = vacios = 0
     for m in pend:
         rid = m['res'].get('id', '')
-        if not dry and not test_to and fs.get('mail_log/%s_%s' % (rid, m['key'])) is not None:
-            skipped += 1
-            log('  · ya enviado: %s %s' % (rid, m['key']))
-            continue
+        if not dry and not test_to:
+            prev = fs.get('mail_log/%s_%s' % (rid, m['key']))
+            if prev is not None:
+                pd = str(prev.get('date') or prev.get('sentAt') or '')[:10]
+                rc = str(m['res'].get('created') or '')[:10]
+                if not (pd and rc and pd < rc):
+                    skipped += 1
+                    log('  · ya enviado: %s %s' % (rid, m['key']))
+                    continue
+                # La referencia se reutilizó (reserva anterior borrada con el
+                # mismo id): ese registro es de OTRA reserva y no cuenta.
+                log('  · registro viejo de una reserva borrada con la misma referencia: reenvío %s %s' % (rid, m['key']))
         dest   = test_to or m['to']
         asunto = ('[PRUEBA] ' + m['subject']) if test_to else m['subject']
         # Nunca se manda un correo en blanco: si la plantilla se ha quedado sin

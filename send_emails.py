@@ -724,6 +724,63 @@ def check_mode():
     log('\nRESULTADO: %s' % ('todo correcto, ya puedes enviar' if ok else 'hay algo que arreglar'))
     return 0 if ok else 4
 
+NTFY_URL = 'https://ntfy.sh/ah-alertas-7f3k9m2q8x'
+NTFY_TOPIC = 'ah-alertas-7f3k9m2q8x'
+
+def notif_enviar(titulo, mensaje, etiqueta='bell'):
+    """Aviso instantaneo al movil via ntfy.sh. Nunca lanza excepcion."""
+    try:
+        cuerpo = json.dumps({'topic': NTFY_TOPIC, 'title': titulo, 'message': mensaje,
+                             'tags': [etiqueta], 'priority': 4}, ensure_ascii=False).encode('utf-8')
+        req = urllib.request.Request(NTFY_URL, data=cuerpo,
+                                     headers={'Content-Type': 'application/json'})
+        urllib.request.urlopen(req, timeout=15).read()
+        log('  \U0001f514 %s' % titulo)
+    except Exception as e:
+        log('  (aviso al movil no enviado: %s)' % e)
+
+def notif_pass(fs):
+    """Respaldo del aviso al movil: reserva nueva, pago o cancelacion.
+
+    La web ya avisa al instante; aqui se cubre lo que se haya podido perder
+    (movil sin cobertura, navegador bloqueado...). El estado por reserva se
+    guarda en notif/state para no repetir el mismo aviso dos veces.
+    """
+    try:
+        estado = como_dic(fs.get('notif/state'))
+    except Exception:
+        estado = {}
+    visto = estado.get('seen') if isinstance(estado.get('seen'), dict) else {}
+    try:
+        docs = fs.docs('reservations')
+    except Exception as e:
+        log('  (notificaciones: no puedo leer reservations: %s)' % e)
+        return
+    ETIQ = {'new': 'tada', 'pay': 'credit_card', 'cancel': 'x'}
+    for rid, campos in docs:
+        d = como_dic(campos)
+        st = str(d.get('status') or '')
+        prev = visto.get(rid)
+        if prev == st:
+            continue
+        nombre = ('%s %s' % (d.get('first') or '', d.get('last') or '')).strip()
+        try:
+            importe = 'CHF ' + format(int(round(float(d.get('total') or 0))), ',d').replace(',', chr(39))
+        except Exception:
+            importe = 'CHF ?'
+        base = '%s · %s → %s · %s · %s' % (rid, d.get('ci') or '?', d.get('co') or '?', nombre or 'sin nombre', importe)
+        if prev is None and not d.get('notified'):
+            notif_enviar('Nueva reserva · ' + rid, base, ETIQ['new'])
+        if st == 'paid' and prev not in (None, 'paid') and not d.get('notifiedPay'):
+            notif_enviar('Pago recibido · ' + rid, base, ETIQ['pay'])
+        if st == 'cancelled' and prev != 'cancelled' and not d.get('notifiedCancel'):
+            notif_enviar('Reserva cancelada · ' + rid, base, ETIQ['cancel'])
+        visto[rid] = st
+    try:
+        fs.set('notif', 'state', {'seen': visto})
+    except Exception as e:
+        log('  (no puedo guardar el estado de notificaciones: %s)' % e)
+
 def procesar_outbox(fs, api, frm, site, reply, dry, test_to):
     """Envía lo que la web ha dejado en cola (bandeja de salida).
 
@@ -1120,6 +1177,7 @@ def main():
 
     cola = procesar_outbox(fs, api, frm, site, reply, dry, test_to)
     if not dry and not test_to:
+        notif_pass(fs)
         anotar_ejecucion(fs, sent + cola, ahora.strftime('%H:%M'))
 
     log('Resumen: %d enviados · %d ya enviados · %d fallidos · %d de la bandeja' %

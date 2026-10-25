@@ -290,7 +290,87 @@ def sincronizar(fs):
             log('  · feed %s (%d eventos) sin cambios' % (ruta, len(rangos)))
 
     log('Alojamientos sincronizados: %d' % tocados)
+    try:
+        igualar_precios(fs, props)
+    except Exception as e:
+        log('Precios Airbnb: %s' % str(e)[:160])
     return 0
+
+
+def igualar_precios(fs, props):
+    """Iguala el precio por noche con Airbnb. Como mucho 2 casas por pasada,
+    para no pasarse del tiempo de GitHub Actions ni saturar a Airbnb.
+    """
+    try:
+        from airbnb_prices import listing_id, precios_de
+    except Exception as e:
+        log('Precios Airbnb: no se pudo cargar airbnb_prices.py (%s)' % e)
+        return
+    try:
+        from zoneinfo import ZoneInfo
+        hoy = dt.datetime.now(ZoneInfo('Europe/Zurich')).date()
+    except Exception:
+        hoy = HOY
+    hoy_s = iso(hoy)
+    cola = []
+    for pid, p in props:
+        if not listing_id(p):
+            continue
+        last = str(p.get('airbnbLastSync') or '')
+        if last[:10] == hoy_s and '--prices' not in sys.argv:
+            continue
+        cola.append((last, pid, p))
+    cola.sort()
+    if not cola:
+        log('Precios Airbnb: nada pendiente hoy')
+        return
+    hechos = 0
+    for _, pid, p in cola[:2]:
+        nombre = p.get('name') or pid
+        lid = listing_id(p)
+        log('Precios Airbnb · %s · anuncio %s' % (nombre, lid))
+        try:
+            precios, desc = precios_de(
+                lid,
+                min_stay=p.get('minStay') or 2,
+                adultos=p.get('guests') or 2,
+                hoy=hoy,
+                log=log,
+            )
+        except Exception as e:
+            parchear(fs, 'props', pid, {
+                'airbnbLastError': str(e)[:180],
+                'airbnbLastSync': dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            })
+            log('  ✗ %s' % str(e)[:140])
+            continue
+        if not precios:
+            parchear(fs, 'props', pid, {
+                'airbnbLastError': 'Airbnb no devolvió precios para los próximos días.',
+                'airbnbLastSync': dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                'airbnbNights': 0,
+            })
+            log('  ✗ sin precios')
+            continue
+        overrides = normalizar(p.get('overrides'))
+        for d, v in precios.items():
+            overrides[d] = int(v)
+        campos = {
+            'overrides': overrides,
+            'airbnbLastSync': dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            'airbnbLastError': '',
+            'airbnbNights': len(precios),
+            'airbnbListing': lid,
+            'airbnb': (p.get('airbnb') or '').strip() or ('https://www.airbnb.com/rooms/%s' % lid),
+        }
+        if desc.get('3'):
+            campos['airbnbMidPct'] = int(desc['3'])
+        if desc.get('7'):
+            campos['airbnbWeekPct'] = int(desc['7'])
+        parchear(fs, 'props', pid, campos)
+        log('  ✓ %d noches igualadas · desde %d CHF' % (len(precios), min(precios.values())))
+        hechos += 1
+    log('Precios Airbnb igualados: %d' % hechos)
 
 
 def selftest():

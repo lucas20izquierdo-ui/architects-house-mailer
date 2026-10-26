@@ -25,7 +25,7 @@ permissions:
 jobs:
   send:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -78,7 +78,7 @@ jobs:
         env:
           PYTHONUNBUFFERED: '1'
           FIREBASE_SA_JSON: ${{ secrets.FIREBASE_SA_JSON }}
-        run: timeout 180 python ical_sync.py
+        run: timeout 900 python ical_sync.py
 
       - name: Publish iCal feeds
         if: steps.ical.outputs.toca == 'si' || github.event.inputs.force == 'true'

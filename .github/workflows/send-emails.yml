@@ -62,12 +62,7 @@ jobs:
           TEST_TO:          ${{ vars.TEST_TO }}
           LOGO_URL:         ${{ vars.LOGO_URL }}
           FORCE:            ${{ github.event.inputs.force }}
-                run: |
-          if: [ "${{ github.event.inputs.force }}" = "true" ]; then
-            timeout 900 python ical_sync.py --prices
-          else
-            timeout 900 python ical_sync.py
-          fi
+                        run: if [ "${{ github.event.inputs.force }}" = "true" ]; then timeout 900 python ical_sync.py --prices; else timeout 900 python ical_sync.py; fi
 
       # --- Calendarios iCal -------------------------------------------------
       # Importa el calendario de Airbnb / Booking.com y bloquea esas fechas

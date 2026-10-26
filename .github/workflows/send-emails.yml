@@ -63,7 +63,7 @@ jobs:
           LOGO_URL:         ${{ vars.LOGO_URL }}
           FORCE:            ${{ github.event.inputs.force }}
                 run: |
-          if [ "${{ github.event.inputs.force }}" = "true" ]; then
+          if: [ "${{ github.event.inputs.force }}" = "true" ]; then
             timeout 900 python ical_sync.py --prices
           else
             timeout 900 python ical_sync.py

@@ -62,11 +62,11 @@ jobs:
           TEST_TO:          ${{ vars.TEST_TO }}
           LOGO_URL:         ${{ vars.LOGO_URL }}
           FORCE:            ${{ github.event.inputs.force }}
-        run: |
-          if [ "${{ inputs.test_all }}" = "true" ]; then
-            timeout 300 python send_emails.py --test-all
+                run: |
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then
+            timeout 900 python ical_sync.py --prices
           else
-            timeout 300 python send_emails.py
+            timeout 900 python ical_sync.py
           fi
 
       # --- Calendarios iCal -------------------------------------------------

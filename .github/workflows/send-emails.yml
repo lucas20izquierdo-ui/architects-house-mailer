@@ -15,7 +15,7 @@ on:
         type: boolean
         default: false
       force:
-        description: 'Enviar ahora: ignora la espera anti-duplicados y sincroniza los calendarios'
+        description: 'Enviar ahora: ignora la espera anti-duplicados y sincroniza calendarios y precios Airbnb'
         type: boolean
         default: false
 
@@ -25,7 +25,7 @@ permissions:
 jobs:
   send:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -62,7 +62,12 @@ jobs:
           TEST_TO:          ${{ vars.TEST_TO }}
           LOGO_URL:         ${{ vars.LOGO_URL }}
           FORCE:            ${{ github.event.inputs.force }}
-                        run: if [ "${{ github.event.inputs.force }}" = "true" ]; then timeout 900 python ical_sync.py --prices; else timeout 900 python ical_sync.py; fi
+        run: |
+          if [ "${{ inputs.test_all }}" = "true" ]; then
+            timeout 300 python send_emails.py --test-all
+          else
+            timeout 300 python send_emails.py
+          fi
 
       # --- Calendarios iCal -------------------------------------------------
       # Importa el calendario de Airbnb / Booking.com y bloquea esas fechas
@@ -73,12 +78,13 @@ jobs:
         env:
           PYTHONUNBUFFERED: '1'
           FIREBASE_SA_JSON: ${{ secrets.FIREBASE_SA_JSON }}
+          FORCE_PRICES: ${{ github.event.inputs.force }}
         run: |
-  if [ "${{ github.event.inputs.force }}" = "true" ]; then
-    timeout 900 python ical_sync.py --prices
-  else
-    timeout 900 python ical_sync.py
-  fi
+          if [ "$FORCE_PRICES" = "true" ]; then
+            timeout 900 python ical_sync.py --prices
+          else
+            timeout 900 python ical_sync.py
+          fi
 
       - name: Publish iCal feeds
         if: steps.ical.outputs.toca == 'si' || github.event.inputs.force == 'true'

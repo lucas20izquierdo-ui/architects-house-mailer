@@ -78,7 +78,12 @@ jobs:
         env:
           PYTHONUNBUFFERED: '1'
           FIREBASE_SA_JSON: ${{ secrets.FIREBASE_SA_JSON }}
-        run: timeout 900 python ical_sync.py
+        run: |
+  if [ "${{ github.event.inputs.force }}" = "true" ]; then
+    timeout 900 python ical_sync.py --prices
+  else
+    timeout 900 python ical_sync.py
+  fi
 
       - name: Publish iCal feeds
         if: steps.ical.outputs.toca == 'si' || github.event.inputs.force == 'true'

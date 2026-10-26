@@ -22,7 +22,7 @@ import urllib.request
 API_KEY = 'd306zoyjsyarp7ifhu67rjxn52tv0t20'
 UA = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
       '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36')
-DIAS = 30          # noches hacia delante que se igualan
+DIAS = 183         # noches hacia delante: horizonte móvil de seis meses
 PAUSA = 0.3        # segundos entre consultas, para no saturar
 
 
@@ -156,7 +156,7 @@ def _pct(total, base):
 
 
 def precios_de(listing, min_stay=2, adultos=2, dias=DIAS, hoy=None, log=None):
-    """Devuelve {fecha: precio_noche} y los descuentos de estancia medidos.
+    """Devuelve {fecha: precio_noche} y los descuentos de estancia medidos para seis meses.
 
     El precio de cada noche es el que Airbnb cobra por noche en una estancia
     de `min_stay` noches (el mínimo de la casa). Así una reserva de esa

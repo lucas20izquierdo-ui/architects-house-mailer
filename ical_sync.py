@@ -330,12 +330,16 @@ def igualar_precios(fs, props):
         lid = listing_id(p)
         log('Precios Airbnb · %s · anuncio %s' % (nombre, lid))
         try:
-            precios, desc = precios_de(
+            # Cache exact 1-adult Airbnb quotes only for Maison du Lac, the
+            # intentionally active listing. Other properties remain untouched.
+            guardar_cotizaciones = (pid == 'p1' and nombre == 'Maison du Lac')
+            precios, desc, stay_quotes = precios_de(
                 lid,
                 min_stay=p.get('minStay') or 2,
                 adultos=p.get('guests') or 2,
                 hoy=hoy,
                 log=log,
+                cotizaciones=guardar_cotizaciones,
             )
         except Exception as e:
             parchear(fs, 'props', pid, {
@@ -355,14 +359,22 @@ def igualar_precios(fs, props):
         overrides = normalizar(p.get('overrides'))
         for d, v in precios.items():
             overrides[d] = int(v)
+        sync_at = dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
         campos = {
             'overrides': overrides,
-            'airbnbLastSync': dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            'airbnbLastSync': sync_at,
             'airbnbLastError': '',
             'airbnbNights': len(precios),
             'airbnbListing': lid,
             'airbnb': (p.get('airbnb') or '').strip() or ('https://www.airbnb.com/rooms/%s' % lid),
         }
+        if stay_quotes:
+            hasta = iso(hoy + dt.timedelta(days=183))
+            campos['airbnbStayQuotes'] = {
+                fecha: datos for fecha, datos in stay_quotes.items()
+                if iso(hoy) <= fecha <= hasta and isinstance(datos, dict)
+            }
+            campos['airbnbStayQuotesSyncedAt'] = sync_at
         if desc.get('3'):
             campos['airbnbMidPct'] = int(desc['3'])
         if desc.get('7'):

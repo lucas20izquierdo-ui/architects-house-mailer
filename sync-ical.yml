@@ -8,7 +8,11 @@ on:
   workflow_dispatch:
     inputs:
       force:
-        description: 'Force the iCal and Airbnb price sync now'
+        description: 'Force the iCal and daily Airbnb price sync now'
+        type: boolean
+        default: false
+      quotes_only:
+        description: 'Fetch the next exact guest-quote batch only; skip daily prices and iCal'
         type: boolean
         default: false
 
@@ -39,8 +43,11 @@ jobs:
           PYTHONUNBUFFERED: '1'
           FIREBASE_SA_JSON: ${{ secrets.FIREBASE_SA_JSON }}
           FORCE_PRICES: ${{ inputs.force }}
+          QUOTES_ONLY: ${{ inputs.quotes_only }}
         run: |
-          if [ "$FORCE_PRICES" = "true" ]; then
+          if [ "$QUOTES_ONLY" = "true" ]; then
+            timeout 900 python ical_sync.py --quotes-only
+          elif [ "$FORCE_PRICES" = "true" ]; then
             timeout 900 python ical_sync.py --prices
           else
             timeout 900 python ical_sync.py

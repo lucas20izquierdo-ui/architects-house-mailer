@@ -156,15 +156,16 @@ def _pct(total, base):
 
 
 def precios_de(listing, min_stay=2, adultos=2, dias=DIAS, hoy=None, log=None,
-               cotizaciones=False):
-    """Devuelve precios diarios y, opcionalmente, cotizaciones exactas 3/7/9 noches.
+               cotizaciones=False, cotizaciones_desde=0, cotizaciones_hasta=None):
+    """Devuelve precios diarios y cotizaciones 3/7/9 noches en un lote opcional.
 
-    Las cotizaciones exactas se guardan sólo para el huésped de referencia
-    (1 adulto); permiten que la web reproduzca las ofertas específicas de Airbnb
-    en esas duraciones, incluida la limpieza y antes de la tasa local.
+    Las cotizaciones exactas se guardan sólo para 1 adulto. El lote evita hacer
+    las 549 consultas exactas (183 fechas x 3 duraciones) en una sola ejecución.
     """
     log = log or (lambda *a: None)
     hoy = hoy or dt.date.today()
+    if cotizaciones_hasta is None:
+        cotizaciones_hasta = dias
     noches = max(1, int(min_stay or 1))
     plantilla, op = cargar(listing)
     out = {}
@@ -193,7 +194,7 @@ def precios_de(listing, min_stay=2, adultos=2, dias=DIAS, hoy=None, log=None,
         if primera is None:
             primera = ci
         log('  %s  %d CHF/noche  (estancia %d = %.0f)' % (ci, por_noche, usado, total))
-        if cotizaciones:
+        if cotizaciones and cotizaciones_desde <= i < cotizaciones_hasta:
             cotizaciones_dia = {}
             for largo in (3, 7, 9):
                 try:

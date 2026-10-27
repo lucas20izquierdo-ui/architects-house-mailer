@@ -103,16 +103,20 @@ def cargar(listing):
     return plantilla, hm.group(1)
 
 
-def cotizar(plantilla, op, listing, ci, noches, adultos=2):
+def cotizar(plantilla, op, listing, ci, noches, adultos=2, ninos=0):
     """Total que ve el huésped para esa estancia, o None si no está libre."""
     co = (dt.date.fromisoformat(ci) + dt.timedelta(days=noches)).isoformat()
     vars = json.loads(json.dumps(plantilla))
     vars['dateRange'] = {'startDate': ci, 'endDate': co}
-    vars['guestCounts'] = {'numberOfAdults': int(adultos or 2)}
+    guest_counts = vars.get('guestCounts') or {}
+    guest_counts['numberOfAdults'] = int(adultos or 2)
+    guest_counts['numberOfChildren'] = int(ninos or 0)
+    vars['guestCounts'] = guest_counts
     req = vars.get('pdpSectionsRequest') or {}
     req['checkIn'] = ci
     req['checkOut'] = co
     req['adults'] = str(int(adultos or 2))
+    req['children'] = str(int(ninos or 0))
     req['sectionIds'] = ['BOOK_IT_SIDEBAR']
     vars['pdpSectionsRequest'] = req
     vars['includePdpMigrationBookItSidebarFragment'] = True
@@ -156,11 +160,12 @@ def _pct(total, base):
 
 
 def precios_de(listing, min_stay=2, adultos=2, dias=DIAS, hoy=None, log=None,
-               cotizaciones=False, cotizaciones_desde=0, cotizaciones_hasta=None):
-    """Devuelve precios diarios y cotizaciones 3/7/9 noches en un lote opcional.
+               cotizaciones=False, cotizaciones_desde=0, cotizaciones_hasta=None,
+               cotizaciones_adultos=None, cotizaciones_ninos=0):
+    """Devuelve precios diarios y cotizaciones exactas 3/7/9 en un lote.
 
-    Las cotizaciones exactas se guardan sólo para 1 adulto. El lote evita hacer
-    las 549 consultas exactas (183 fechas x 3 duraciones) en una sola ejecución.
+    La caché admite una combinación adulta/niños por ejecución para evitar
+    agotar el timeout de GitHub Actions y reducir picos de peticiones a Airbnb.
     """
     log = log or (lambda *a: None)
     hoy = hoy or dt.date.today()
@@ -198,9 +203,13 @@ def precios_de(listing, min_stay=2, adultos=2, dias=DIAS, hoy=None, log=None,
             cotizaciones_dia = {}
             for largo in (3, 7, 9):
                 try:
-                    exacto = cotizar(plantilla, op, listing, ci, largo, 1)
+                    exacto = cotizar(
+                        plantilla, op, listing, ci, largo,
+                        cotizaciones_adultos or adultos,
+                        cotizaciones_ninos,
+                    )
                 except Exception as e:
-                    log('  ! cotización %d noches, 1 adulto, %s: %s' % (largo, ci, str(e)[:80]))
+                    log('  ! cotización %d noches, %d adulto(s) + %d niño(s), %s: %s' % (largo, cotizaciones_adultos or adultos, cotizaciones_ninos, ci, str(e)[:80]))
                     time.sleep(PAUSA)
                     continue
                 time.sleep(PAUSA)

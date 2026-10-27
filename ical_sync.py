@@ -325,24 +325,30 @@ def igualar_precios(fs, props):
         log('Precios Airbnb: nada pendiente hoy')
         return
     hechos = 0
-    # Tres lotes de 61 fechas: una pasada completa cubre las 183 fechas en
-    # tres ejecuciones diarias, sin superar el timeout de GitHub Actions.
-    quote_batch_days = 61
-    quote_batch_count = (DIAS + quote_batch_days - 1) // quote_batch_days
+    # Una combinación de huéspedes por ejecución; para Maison (capacidad 4)
+    # son 10 combinaciones. Se consultan las 61 fechas próximas y 3/7/9 noches.
+    quote_days = 61
     for _, pid, p in cola[:2]:
         nombre = p.get('name') or pid
         lid = listing_id(p)
         log('Precios Airbnb · %s · anuncio %s' % (nombre, lid))
         try:
-            # Cache exact 1-adult Airbnb quotes only for Maison du Lac, the
+            # Exact guest-combination cache is only for Maison du Lac, the
             # intentionally active listing. Other properties remain untouched.
             guardar_cotizaciones = (pid == 'p1' and nombre == 'Maison du Lac')
-            quote_batch = int(p.get('airbnbStayQuoteBatchIndex') or 0) % quote_batch_count
-            quote_start = quote_batch * quote_batch_days
-            quote_end = min(DIAS, quote_start + quote_batch_days)
+            capacidad = max(1, min(4, int(p.get('guests') or 1)))
+            combinaciones = [
+                (a, c)
+                for a, c in [(2, 0), (1, 0), (1, 1), (3, 0), (2, 1),
+                             (1, 2), (4, 0), (3, 1), (2, 2), (1, 3)]
+                if a + c <= capacidad
+            ]
+            guest_batch = int(p.get('airbnbStayQuoteGuestBatchIndex') or 0) % len(combinaciones)
+            quote_adults, quote_children = combinaciones[guest_batch]
+            quote_key = 'a%dc%d' % (quote_adults, quote_children)
             if guardar_cotizaciones:
-                log('  Cotizaciones exactas: lote %d/%d · fechas %d–%d de %d' % (
-                    quote_batch + 1, quote_batch_count, quote_start + 1, quote_end, DIAS))
+                log('  Cotización exacta · combinación %d/%d (%d adulto(s) + %d niño(s)) · 3/7/9 noches · próximas %d fechas' % (
+                    guest_batch + 1, len(combinaciones), quote_adults, quote_children, quote_days))
             precios, desc, stay_quotes = precios_de(
                 lid,
                 min_stay=p.get('minStay') or 2,
@@ -350,8 +356,10 @@ def igualar_precios(fs, props):
                 hoy=hoy,
                 log=log,
                 cotizaciones=guardar_cotizaciones,
-                cotizaciones_desde=quote_start,
-                cotizaciones_hasta=quote_end,
+                cotizaciones_desde=0,
+                cotizaciones_hasta=min(quote_days, DIAS),
+                cotizaciones_adultos=quote_adults,
+                cotizaciones_ninos=quote_children,
             )
         except Exception as e:
             parchear(fs, 'props', pid, {
@@ -381,25 +389,34 @@ def igualar_precios(fs, props):
             'airbnb': (p.get('airbnb') or '').strip() or ('https://www.airbnb.com/rooms/%s' % lid),
         }
         if stay_quotes:
-            hasta = iso(hoy + dt.timedelta(days=DIAS))
-            quotes = normalizar(p.get('airbnbStayQuotes'))
-            quote_times = normalizar(p.get('airbnbStayQuoteUpdatedAtByDate'))
+            hasta = iso(hoy + dt.timedelta(days=quote_days))
+            quotes_by_guest = normalizar(p.get('airbnbStayQuotesByGuests'))
+            times_by_guest = normalizar(p.get('airbnbStayQuoteUpdatedAtByGuests'))
             for fecha, datos in stay_quotes.items():
                 if not (iso(hoy) <= fecha <= hasta and isinstance(datos, dict)):
                     continue
-                previos = quotes.get(fecha)
+                por_fecha = quotes_by_guest.get(fecha)
+                por_fecha = dict(por_fecha) if isinstance(por_fecha, dict) else {}
+                previos = por_fecha.get(quote_key)
                 combinado = dict(previos) if isinstance(previos, dict) else {}
                 combinado.update(datos)
-                quotes[fecha] = combinado
-                quote_times[fecha] = sync_at
-            quotes = {fecha: datos for fecha, datos in quotes.items()
-                      if iso(hoy) <= fecha <= hasta and isinstance(datos, dict)}
-            quote_times = {fecha: marca for fecha, marca in quote_times.items()
-                           if fecha in quotes}
-            campos['airbnbStayQuotes'] = quotes
-            campos['airbnbStayQuoteUpdatedAtByDate'] = quote_times
+                por_fecha[quote_key] = combinado
+                quotes_by_guest[fecha] = por_fecha
+                tiempos_fecha = times_by_guest.get(fecha)
+                tiempos_fecha = dict(tiempos_fecha) if isinstance(tiempos_fecha, dict) else {}
+                tiempos_fecha[quote_key] = sync_at
+                times_by_guest[fecha] = tiempos_fecha
+            horizonte = iso(hoy + dt.timedelta(days=DIAS))
+            quotes_by_guest = {fecha: valores for fecha, valores in quotes_by_guest.items()
+                               if iso(hoy) <= fecha <= horizonte and isinstance(valores, dict)}
+            times_by_guest = {fecha: valores for fecha, valores in times_by_guest.items()
+                              if fecha in quotes_by_guest and isinstance(valores, dict)}
+            campos['airbnbStayQuotesByGuests'] = quotes_by_guest
+            campos['airbnbStayQuoteUpdatedAtByGuests'] = times_by_guest
+            campos['airbnbStayQuoteGuestBatchIndex'] = (guest_batch + 1) % len(combinaciones)
+            campos['airbnbStayQuoteLastGuestKey'] = quote_key
             campos['airbnbStayQuotesSyncedAt'] = sync_at
-            campos['airbnbStayQuoteBatchIndex'] = (quote_batch + 1) % quote_batch_count
+            log('  ✓ cotizaciones guardadas para %d fechas · %s' % (len(stay_quotes), quote_key))
         if desc.get('3'):
             campos['airbnbMidPct'] = int(desc['3'])
         if desc.get('7'):

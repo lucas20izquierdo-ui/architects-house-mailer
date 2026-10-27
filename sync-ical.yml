@@ -1,0 +1,62 @@
+name: Sync and publish iCal feeds
+
+on:
+  schedule:
+    # The email workflow runs every five minutes; this separate workflow runs
+    # only once hourly, so a delayed runner cannot accidentally skip the sync.
+    - cron: '0 * * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force the iCal and Airbnb price sync now'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+# Serialize calendar publishers without delaying the email workflow.
+concurrency:
+  group: ical-feed-publisher
+  cancel-in-progress: false
+
+jobs:
+  sync-ical:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Sync iCal calendars
+        env:
+          PYTHONUNBUFFERED: '1'
+          FIREBASE_SA_JSON: ${{ secrets.FIREBASE_SA_JSON }}
+          FORCE_PRICES: ${{ inputs.force }}
+        run: |
+          if [ "$FORCE_PRICES" = "true" ]; then
+            timeout 900 python ical_sync.py --prices
+          else
+            timeout 900 python ical_sync.py
+          fi
+
+      - name: Publish iCal feeds
+        run: |
+          git config user.name  "AH iCal bot"
+          git config user.email "ical@architectshouse.local"
+          git add -A ical
+          if git diff --cached --quiet; then
+            echo "Los calendarios no han cambiado."
+          else
+            git commit -m "Actualizar calendarios iCal"
+            # Reconcile remote commits safely. Never force-push.
+            git fetch origin "$GITHUB_REF_NAME"
+            git rebase "origin/$GITHUB_REF_NAME"
+            git push
+          fi

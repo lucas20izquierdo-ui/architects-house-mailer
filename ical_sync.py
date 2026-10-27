@@ -427,6 +427,82 @@ def igualar_precios(fs, props):
     log('Precios Airbnb igualados: %d' % hechos)
 
 
+def igualar_cotizaciones(fs, props):
+    """Guarda un lote exacto sin refrescar los precios diarios ni los iCal."""
+    try:
+        from airbnb_prices import DIAS, cotizaciones_de, listing_id
+    except Exception as e:
+        log('Cotizaciones Airbnb: no se pudo cargar airbnb_prices.py (%s)' % e)
+        return 1
+    registro = next(((pid, p) for pid, p in props
+                     if pid == 'p1' and (p.get('name') or '') == 'Maison du Lac'), None)
+    if not registro:
+        log('No se encontró Maison du Lac (p1). No se hizo ninguna consulta.')
+        return 1
+    pid, p = registro
+    if not listing_id(p):
+        log('Maison du Lac no tiene identificador de Airbnb.')
+        return 1
+    if p.get('active') is False:
+        log('Maison du Lac está inactiva; no se consultó Airbnb.')
+        return 0
+    capacidad = max(1, min(4, int(p.get('guests') or 1)))
+    combinaciones = [
+        (a, c) for a, c in [(2, 0), (1, 0), (1, 1), (3, 0), (2, 1),
+                            (1, 2), (4, 0), (3, 1), (2, 2), (1, 3)]
+        if a + c <= capacidad
+    ]
+    indice = int(p.get('airbnbStayQuoteGuestBatchIndex') or 0) % len(combinaciones)
+    adultos, ninos = combinaciones[indice]
+    clave = 'a%dc%d' % (adultos, ninos)
+    hoy = dt.datetime.now(dt.timezone.utc).date()
+    dias = min(61, DIAS)
+    log('Cotizaciones solamente · lote %d/%d · %d adulto(s) + %d niño(s) · noches 3/7/9 · %d fechas' %
+        (indice + 1, len(combinaciones), adultos, ninos, dias))
+    try:
+        nuevas = cotizaciones_de(
+            listing_id(p), adultos=adultos, ninos=ninos, dias=dias, hoy=hoy, log=log)
+    except Exception as e:
+        log('✗ No se guardó el lote; el cursor no avanzó: %s' % str(e)[:160])
+        return 1
+    if not nuevas:
+        log('✗ Airbnb no devolvió cotizaciones; el cursor no avanzó.')
+        return 1
+    sync_at = dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    hasta = iso(hoy + dt.timedelta(days=DIAS))
+    quotes_by_guest = normalizar(p.get('airbnbStayQuotesByGuests'))
+    times_by_guest = normalizar(p.get('airbnbStayQuoteUpdatedAtByGuests'))
+    for fecha, datos in nuevas.items():
+        if not (iso(hoy) <= fecha <= iso(hoy + dt.timedelta(days=dias)) and isinstance(datos, dict)):
+            continue
+        por_fecha = quotes_by_guest.get(fecha)
+        por_fecha = dict(por_fecha) if isinstance(por_fecha, dict) else {}
+        previos = por_fecha.get(clave)
+        combinado = dict(previos) if isinstance(previos, dict) else {}
+        combinado.update(datos)
+        por_fecha[clave] = combinado
+        quotes_by_guest[fecha] = por_fecha
+        marcas = times_by_guest.get(fecha)
+        marcas = dict(marcas) if isinstance(marcas, dict) else {}
+        marcas[clave] = sync_at
+        times_by_guest[fecha] = marcas
+    quotes_by_guest = {fecha: datos for fecha, datos in quotes_by_guest.items()
+                       if iso(hoy) <= fecha <= hasta and isinstance(datos, dict)}
+    times_by_guest = {fecha: datos for fecha, datos in times_by_guest.items()
+                      if fecha in quotes_by_guest and isinstance(datos, dict)}
+    siguiente = (indice + 1) % len(combinaciones)
+    parchear(fs, 'props', pid, {
+        'airbnbStayQuotesByGuests': quotes_by_guest,
+        'airbnbStayQuoteUpdatedAtByGuests': times_by_guest,
+        'airbnbStayQuoteGuestBatchIndex': siguiente,
+        'airbnbStayQuoteLastGuestKey': clave,
+        'airbnbStayQuotesSyncedAt': sync_at,
+    })
+    log('✓ Guardadas cotizaciones %s para %d fechas · siguiente lote %d/%d' %
+        (clave, len(nuevas), siguiente + 1, len(combinaciones)))
+    return 0
+
+
 def selftest():
     ics = """BEGIN:VCALENDAR\r
 VERSION:2.0\r
@@ -470,6 +546,9 @@ def main():
             % (len(props), len(con_url), ', '.join(con_url) or 'ninguno'))
         return 0
     fs = Firestore(sa)
+    if '--quotes-only' in sys.argv:
+        log('=== Airbnb guest quote batch %s ===' % iso(HOY))
+        return igualar_cotizaciones(fs, fs.docs('props'))
     log('=== iCal sync %s ===' % iso(HOY))
     return sincronizar(fs)
 

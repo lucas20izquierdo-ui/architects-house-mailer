@@ -155,18 +155,20 @@ def _pct(total, base):
     return int((1 - float(total) / float(base)) * 100 + 0.5)
 
 
-def precios_de(listing, min_stay=2, adultos=2, dias=DIAS, hoy=None, log=None):
-    """Devuelve {fecha: precio_noche} y los descuentos de estancia medidos para seis meses.
+def precios_de(listing, min_stay=2, adultos=2, dias=DIAS, hoy=None, log=None,
+               cotizaciones=False):
+    """Devuelve precios diarios y, opcionalmente, cotizaciones exactas 3/7/9 noches.
 
-    El precio de cada noche es el que Airbnb cobra por noche en una estancia
-    de `min_stay` noches (el mínimo de la casa). Así una reserva de esa
-    duración cuesta lo mismo que en Airbnb, sin la tasa y sin la limpieza.
+    Las cotizaciones exactas se guardan sólo para el huésped de referencia
+    (1 adulto); permiten que la web reproduzca las ofertas específicas de Airbnb
+    en esas duraciones, incluida la limpieza y antes de la tasa local.
     """
     log = log or (lambda *a: None)
     hoy = hoy or dt.date.today()
     noches = max(1, int(min_stay or 1))
     plantilla, op = cargar(listing)
     out = {}
+    stay_quotes = {}
     primera = None
     for i in range(dias):
         ci = (hoy + dt.timedelta(days=i)).isoformat()
@@ -191,6 +193,20 @@ def precios_de(listing, min_stay=2, adultos=2, dias=DIAS, hoy=None, log=None):
         if primera is None:
             primera = ci
         log('  %s  %d CHF/noche  (estancia %d = %.0f)' % (ci, por_noche, usado, total))
+        if cotizaciones:
+            cotizaciones_dia = {}
+            for largo in (3, 7, 9):
+                try:
+                    exacto = cotizar(plantilla, op, listing, ci, largo, 1)
+                except Exception as e:
+                    log('  ! cotización %d noches, 1 adulto, %s: %s' % (largo, ci, str(e)[:80]))
+                    time.sleep(PAUSA)
+                    continue
+                time.sleep(PAUSA)
+                if exacto and exacto > 0:
+                    cotizaciones_dia[str(largo)] = round(float(exacto), 2)
+            if cotizaciones_dia:
+                stay_quotes[ci] = cotizaciones_dia
     desc = {}
     if primera:
         for largo, clave in ((3, '3'), (7, '7')):
@@ -218,4 +234,4 @@ def precios_de(listing, min_stay=2, adultos=2, dias=DIAS, hoy=None, log=None):
                 if pct and pct > 0:
                     desc[clave] = pct
                     log('  descuento desde %d noches: %d%%' % (largo, pct))
-    return out, desc
+    return out, desc, stay_quotes

@@ -149,6 +149,37 @@ def cotizar(plantilla, op, listing, ci, noches, adultos=2, ninos=0):
     return total
 
 
+def cotizaciones_de(listing, adultos, ninos=0, dias=61, hoy=None, log=None):
+    """Consulta sólo cotizaciones exactas 3/7/9 noches para un grupo.
+
+    Está pensada para ejecuciones manuales rápidas de caché: no vuelve a
+    descargar los 183 precios diarios ni calcula descuentos de referencia.
+    """
+    log = log or (lambda *a: None)
+    hoy = hoy or dt.date.today()
+    plantilla, op = cargar(listing)
+    out = {}
+    for i in range(max(0, int(dias))):
+        ci = (hoy + dt.timedelta(days=i)).isoformat()
+        cotizaciones_dia = {}
+        for largo in (3, 7, 9):
+            try:
+                total = cotizar(plantilla, op, listing, ci, largo, adultos, ninos)
+            except Exception as e:
+                log('  ! %s noches, %s adulto(s) + %s niño(s), %s: %s' %
+                    (largo, adultos, ninos, ci, str(e)[:90]))
+                time.sleep(PAUSA)
+                continue
+            time.sleep(PAUSA)
+            if total and total > 0:
+                cotizaciones_dia[str(largo)] = round(float(total), 2)
+        if cotizaciones_dia:
+            out[ci] = cotizaciones_dia
+        if (i + 1) % 10 == 0:
+            log('  Cotizaciones consultadas para %d/%d fechas' % (i + 1, dias))
+    return out
+
+
 def _redondeo(v):
     return int(float(v) + 0.5)
 
